@@ -1,0 +1,648 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+}
+
+enum StudentGender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum StudentStatus {
+  EXCELLENT
+  GOOD
+  NEEDS_SUPPORT
+}
+
+enum LessonPlanStatus {
+  DRAFT
+  COMPLETED
+  TAUGHT
+}
+
+enum ActivityType {
+  WARM_UP
+  EXPLORE
+  PRACTICE
+  APPLICATION
+  OTHER
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  FILL_BLANK
+  MATCHING
+  ESSAY
+}
+
+enum AttendanceStatus {
+  PRESENT
+  EXCUSED_ABSENCE
+  UNEXCUSED_ABSENCE
+  LATE
+}
+
+enum AssessmentLevel {
+  EXCELLENT
+  COMPLETED
+  NEEDS_SUPPORT
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum BehaviorCategory {
+  DISCIPLINE
+  LEARNING
+  HYGIENE
+  TEAMWORK
+  RESPONSIBILITY
+  OTHER
+}
+
+enum BehaviorLevel {
+  POSITIVE
+  REMINDER
+  NEEDS_ATTENTION
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String
+  role             Role      @default(TEACHER)
+  refreshTokenHash String?
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  teacher          Teacher?
+}
+
+model Teacher {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  fullName  String
+  avatarUrl String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user                   User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  classrooms             Classroom[]
+  teachingPlans          TeachingPlan[]
+  lessonPlans            LessonPlan[]
+  teachingActivities     TeachingActivity[]
+  worksheets             Worksheet[]
+  attendanceSessions     AttendanceSession[]
+  assessments            Assessment[]
+  studentComments        StudentComment[]
+  teachingResources      TeachingResource[]
+  tasks                  TeacherTask[]
+  studentBehaviorRecords StudentBehaviorRecord[]
+  weeklyClassReviews     WeeklyClassReview[]
+  monthlyClassReviews    MonthlyClassReview[]
+}
+
+model SchoolYear {
+  id        String   @id @default(uuid())
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  classrooms          Classroom[]
+  teachingPlans       TeachingPlan[]
+  assessments         Assessment[]
+  weeklyClassReviews  WeeklyClassReview[]
+  monthlyClassReviews MonthlyClassReview[]
+}
+
+model Grade {
+  id        String   @id @default(uuid())
+  name      String
+  level     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  classrooms         Classroom[]
+  lessons            Lesson[]
+  teachingActivities TeachingActivity[]
+  worksheets         Worksheet[]
+  teachingResources  TeachingResource[]
+}
+
+model Subject {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lessons            Lesson[]
+  teachingPlans      TeachingPlan[]
+  lessonPlans        LessonPlan[]
+  teachingActivities TeachingActivity[]
+  worksheets         Worksheet[]
+  assessments        Assessment[]
+  studentComments    StudentComment[]
+  teachingResources  TeachingResource[]
+}
+
+model Classroom {
+  id           String    @id @default(uuid())
+  name         String
+  gradeId      String
+  schoolYearId String
+  teacherId    String
+  room         String?
+  schedule     String?
+  accent       String?   @default("teal")
+  status       String    @default("ACTIVE")
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  grade                  Grade                   @relation(fields: [gradeId], references: [id])
+  schoolYear             SchoolYear              @relation(fields: [schoolYearId], references: [id])
+  teacher                Teacher                 @relation(fields: [teacherId], references: [id])
+  classStudents          ClassStudent[]
+  teachingPlans          TeachingPlan[]
+  lessonPlans            LessonPlan[]
+  attendanceSessions     AttendanceSession[]
+  assessments            Assessment[]
+  studentComments        StudentComment[]
+  worksheets             Worksheet[]
+  studentBehaviorRecords StudentBehaviorRecord[]
+  weeklyClassReviews     WeeklyClassReview[]
+  monthlyClassReviews    MonthlyClassReview[]
+}
+
+model Student {
+  id          String        @id @default(uuid())
+  studentCode String?       @unique
+  fullName    String
+  initials    String?
+  dateOfBirth DateTime?
+  dobString   String?
+  gender      StudentGender @default(MALE)
+  parentName  String?
+  parentPhone String?
+  avatarColor String?       @default("bg-teal-100 text-teal-700")
+  status      StudentStatus @default(EXCELLENT)
+  deletedAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  classStudents      ClassStudent[]
+  studentAttendances StudentAttendance[]
+  studentAssessments StudentAssessment[]
+  comments           StudentComment[]
+  behaviorRecords    StudentBehaviorRecord[]
+}
+
+model ClassStudent {
+  id          String    @id @default(uuid())
+  classroomId String
+  studentId   String
+  joinedAt    DateTime  @default(now())
+  leftAt      DateTime?
+  status      String    @default("ACTIVE")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, studentId])
+}
+
+model Lesson {
+  id             String   @id @default(uuid())
+  subjectId      String
+  gradeId        String
+  title          String
+  weekNumber     Int      @default(1)
+  defaultPeriods Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  subject           Subject            @relation(fields: [subjectId], references: [id])
+  grade             Grade              @relation(fields: [gradeId], references: [id])
+  teachingPlans     TeachingPlan[]
+  lessonPlans       LessonPlan[]
+  worksheets        Worksheet[]
+  teachingResources TeachingResource[]
+}
+
+model TeachingPlan {
+  id              String    @id @default(uuid())
+  teacherId       String
+  schoolYearId    String
+  classroomId     String
+  subjectId       String
+  lessonId        String?
+  title           String?
+  subtitle        String?
+  room            String?
+  weekNumber      Int       @default(1)
+  plannedDate     DateTime?
+  numberOfPeriods Int       @default(1)
+  status          String    @default("PLANNED")
+  meta            String?
+  tone            String?   @default("teal")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  teacher    Teacher    @relation(fields: [teacherId], references: [id])
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id])
+  classroom  Classroom  @relation(fields: [classroomId], references: [id])
+  subject    Subject    @relation(fields: [subjectId], references: [id])
+  lesson     Lesson?    @relation(fields: [lessonId], references: [id])
+}
+
+model LessonPlan {
+  id                   String           @id @default(uuid())
+  teacherId            String
+  classroomId          String?
+  subjectId            String?
+  lessonId             String?
+  title                String
+  subjectName          String?
+  gradeName            String?
+  weekNumber           Int?             @default(1)
+  periodNumber         Int?             @default(1)
+  teachingDate         DateTime?
+  durationMinutes      Int              @default(40)
+  objectives           String?          @db.Text
+  teachingEquipment    String?          @db.Text
+  postLessonAdjustment String?          @db.Text
+  status               LessonPlanStatus @default(DRAFT)
+  version              Int              @default(1)
+  deletedAt            DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  teacher    Teacher              @relation(fields: [teacherId], references: [id])
+  classroom  Classroom?           @relation(fields: [classroomId], references: [id])
+  subject    Subject?             @relation(fields: [subjectId], references: [id])
+  lesson     Lesson?              @relation(fields: [lessonId], references: [id])
+  activities LessonPlanActivity[]
+  resources  LessonPlanResource[]
+}
+
+model LessonPlanActivity {
+  id              String       @id @default(uuid())
+  lessonPlanId    String
+  activityType    ActivityType @default(WARM_UP)
+  phase           String
+  title           String
+  objective       String?      @db.Text
+  durationMinutes Int          @default(5)
+  method          String?
+  technique       String?
+  competencies    String?
+  qualities       String?
+  teacherActivity String?      @db.Text
+  studentActivity String?      @db.Text
+  sortOrder       Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  lessonPlan LessonPlan @relation(fields: [lessonPlanId], references: [id], onDelete: Cascade)
+}
+
+model TeachingActivity {
+  id              String       @id @default(uuid())
+  teacherId       String?
+  title           String
+  description     String?      @db.Text
+  activityType    ActivityType @default(WARM_UP)
+  typeName        String?
+  gradeId         String?
+  gradeName       String?
+  subjectId       String?
+  subjectName     String?
+  durationMinutes Int          @default(10)
+  icon            String?      @default("Grid2X2")
+  usesCount       Int          @default(0)
+  isPublic        Boolean      @default(true)
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  teacher Teacher? @relation(fields: [teacherId], references: [id])
+  grade   Grade?   @relation(fields: [gradeId], references: [id])
+  subject Subject? @relation(fields: [subjectId], references: [id])
+}
+
+model Worksheet {
+  id          String    @id @default(uuid())
+  teacherId   String
+  subjectId   String?
+  gradeId     String?
+  lessonId    String?
+  classroomId String?
+  title       String
+  subtitle    String?
+  description String?   @db.Text
+  status      String    @default("DRAFT")
+  meta        String?
+  tone        String?   @default("teal")
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  teacher   Teacher             @relation(fields: [teacherId], references: [id])
+  subject   Subject?            @relation(fields: [subjectId], references: [id])
+  grade     Grade?              @relation(fields: [gradeId], references: [id])
+  lesson    Lesson?             @relation(fields: [lessonId], references: [id])
+  classroom Classroom?          @relation(fields: [classroomId], references: [id])
+  questions WorksheetQuestion[]
+}
+
+model WorksheetQuestion {
+  id                String       @id @default(uuid())
+  worksheetId       String
+  questionType      QuestionType @default(MULTIPLE_CHOICE)
+  content           String       @db.Text
+  optionsJson       Json?
+  correctAnswerJson Json?
+  explanation       String?      @db.Text
+  sortOrder         Int          @default(0)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  worksheet Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+}
+
+model AttendanceSession {
+  id             String    @id @default(uuid())
+  classroomId    String
+  teacherId      String
+  attendanceDate DateTime  @db.Date
+  sessionPeriod  String?   @default("MORNING")
+  title          String?
+  status         String?   @default("COMPLETED")
+  meta           String?
+  tone           String?   @default("teal")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  classroom   Classroom           @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  teacher     Teacher             @relation(fields: [teacherId], references: [id])
+  attendances StudentAttendance[]
+
+  @@unique([classroomId, attendanceDate])
+}
+
+model StudentAttendance {
+  id                  String           @id @default(uuid())
+  attendanceSessionId String
+  studentId           String
+  status              AttendanceStatus @default(PRESENT)
+  note                String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  attendanceSession AttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Cascade)
+  student           Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([attendanceSessionId, studentId])
+}
+
+model Assessment {
+  id             String    @id @default(uuid())
+  teacherId      String
+  classroomId    String
+  subjectId      String?
+  schoolYearId   String?
+  weekNumber     Int?
+  semester       Int?      @default(1)
+  assessmentDate DateTime  @default(now())
+  title          String
+  subtitle       String?
+  status         String    @default("IN_PROGRESS")
+  meta           String?
+  tone           String?   @default("teal")
+  version        Int       @default(1)
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  teacher            Teacher               @relation(fields: [teacherId], references: [id])
+  classroom          Classroom             @relation(fields: [classroomId], references: [id])
+  subject            Subject?              @relation(fields: [subjectId], references: [id])
+  schoolYear         SchoolYear?           @relation(fields: [schoolYearId], references: [id])
+  criteria           AssessmentCriterion[]
+  studentAssessments StudentAssessment[]
+}
+
+model AssessmentCriterion {
+  id           String   @id @default(uuid())
+  assessmentId String
+  code         String
+  name         String
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assessment         Assessment          @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  studentAssessments StudentAssessment[]
+}
+
+model StudentAssessment {
+  id                    String           @id @default(uuid())
+  assessmentId          String
+  studentId             String
+  assessmentCriterionId String?
+  level                 AssessmentLevel  @default(COMPLETED)
+  score                 Float?
+  comment               String?          @db.Text
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  assessment Assessment           @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    Student              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  criterion  AssessmentCriterion? @relation(fields: [assessmentCriterionId], references: [id], onDelete: SetNull)
+}
+
+model StudentComment {
+  id          String   @id @default(uuid())
+  studentId   String
+  teacherId   String
+  classroomId String
+  subjectId   String?
+  commentDate DateTime @default(now())
+  content     String   @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacher   Teacher   @relation(fields: [teacherId], references: [id])
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  subject   Subject?  @relation(fields: [subjectId], references: [id])
+}
+
+model TeachingResource {
+  id               String    @id @default(uuid())
+  teacherId        String
+  name             String
+  originalFileName String?
+  storedFileName   String?
+  mimeType         String?
+  size             Int?
+  resourceType     String    @default("DOCUMENT")
+  storagePath      String?
+  subjectId        String?
+  gradeId          String?
+  lessonId         String?
+  title            String?
+  subtitle         String?
+  fileUrl          String?
+  externalUrl      String?
+  description      String?   @db.Text
+  status           String?   @default("ACTIVE")
+  meta             String?
+  tone             String?   @default("teal")
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  teacher     Teacher              @relation(fields: [teacherId], references: [id])
+  subject     Subject?             @relation(fields: [subjectId], references: [id])
+  grade       Grade?               @relation(fields: [gradeId], references: [id])
+  lesson      Lesson?              @relation(fields: [lessonId], references: [id])
+  lessonPlans LessonPlanResource[]
+}
+
+model LessonPlanResource {
+  id           String   @id @default(uuid())
+  lessonPlanId String
+  resourceId   String
+  createdAt    DateTime @default(now())
+
+  lessonPlan LessonPlan       @relation(fields: [lessonPlanId], references: [id], onDelete: Cascade)
+  resource   TeachingResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonPlanId, resourceId])
+}
+
+model TeacherTask {
+  id          String       @id @default(uuid())
+  teacherId   String
+  title       String
+  description String?      @db.Text
+  dueDate     String?
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(PENDING)
+  done        Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+}
+
+model AdminAuditLog {
+  id           String   @id @default(uuid())
+  actorUserId  String
+  action       String
+  targetUserId String
+  details      String?  @db.Text
+  createdAt    DateTime @default(now())
+}
+
+model StudentBehaviorRecord {
+  id          String           @id @default(uuid())
+  classroomId String
+  studentId   String
+  teacherId   String
+
+  recordDate  DateTime
+  category    BehaviorCategory
+  level       BehaviorLevel
+  content     String           @db.Text
+
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacher   Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([classroomId, recordDate])
+  @@index([studentId])
+}
+
+model WeeklyClassReview {
+  id           String   @id @default(uuid())
+  classroomId  String
+  teacherId    String
+  schoolYearId String
+
+  weekNumber   Int
+
+  strengths    String?  @db.Text
+  limitations  String?  @db.Text
+  nextWeekPlan String?  @db.Text
+
+  version      Int      @default(1)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  classroom  Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  teacher    Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, schoolYearId, weekNumber])
+}
+
+model MonthlyClassReview {
+  id            String   @id @default(uuid())
+  classroomId   String
+  teacherId     String
+  schoolYearId  String
+
+  year          Int
+  month         Int
+
+  highlights    String?  @db.Text
+  limitations   String?  @db.Text
+  nextMonthPlan String?  @db.Text
+
+  version       Int      @default(1)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  classroom  Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  teacher    Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, year, month])
+}
+
