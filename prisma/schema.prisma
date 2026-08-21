@@ -140,6 +140,7 @@ model Teacher {
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
   teachingAssignments    TeachingAssignment[]
+  schedules              Schedule[]
 }
 
 model SchoolYear {
@@ -160,6 +161,7 @@ model SchoolYear {
   monthlyClassReviews MonthlyClassReview[]
   studentEnrollments  StudentEnrollment[]
   teachingAssignments TeachingAssignment[]
+  schedules           Schedule[]
 }
 
 model Semester {
@@ -216,6 +218,7 @@ model Subject {
   studentComments     StudentComment[]
   teachingResources   TeachingResource[]
   teachingAssignments TeachingAssignment[]
+  schedules           Schedule[]
 }
 
 model Classroom {
@@ -249,6 +252,7 @@ model Classroom {
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
   teachingAssignments    TeachingAssignment[]
+  schedules              Schedule[]
 
   @@unique([schoolYearId, code])
   @@index([schoolYearId])
@@ -361,6 +365,33 @@ model Lesson {
   teachingResources TeachingResource[]
 }
 
+model Schedule {
+  id           String    @id @default(uuid())
+  teacherId    String
+  schoolYearId String
+  classroomId  String
+  subjectId    String
+  title        String
+  plannedDate  DateTime
+  startTime    String    // HH:MM format, e.g. "07:00"
+  endTime      String    // HH:MM format, e.g. "07:45"
+  room         String?
+  notes        String?
+  status       String    @default("PLANNED") // PLANNED, TAUGHT, CANCELLED
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  teacher    Teacher    @relation(fields: [teacherId], references: [id])
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id])
+  classroom  Classroom  @relation(fields: [classroomId], references: [id])
+  subject    Subject    @relation(fields: [subjectId], references: [id])
+
+  @@index([teacherId, plannedDate])
+  @@index([classroomId, plannedDate])
+  @@index([schoolYearId])
+}
+
 model TeachingPlan {
   id              String    @id @default(uuid())
   teacherId       String
@@ -370,12 +401,7 @@ model TeachingPlan {
   lessonId        String?
   title           String?
   subtitle        String?
-  room            String?
   weekNumber      Int       @default(1)
-  plannedDate     DateTime?
-  startTime       String?   // HH:MM format, e.g. "07:00"
-  endTime         String?   // HH:MM format, e.g. "07:45"
-  notes           String?
   numberOfPeriods Int       @default(1)
   status          String    @default("PLANNED")
   meta            String?
@@ -388,6 +414,9 @@ model TeachingPlan {
   classroom  Classroom  @relation(fields: [classroomId], references: [id])
   subject    Subject    @relation(fields: [subjectId], references: [id])
   lesson     Lesson?    @relation(fields: [lessonId], references: [id])
+
+  @@index([teacherId, schoolYearId])
+  @@index([classroomId, subjectId])
 }
 
 model LessonPlan {

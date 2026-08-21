@@ -3,7 +3,6 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
-  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTeachingPlanDto } from './dto/create-teaching-plan.dto';
@@ -13,13 +12,15 @@ import { UpdateTeachingPlanDto } from './dto/update-teaching-plan.dto';
 export class TeachingPlansService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(teacherId?: string, filters?: {
-    classroomId?: string;
-    subjectId?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    status?: string;
-  }) {
+  async findAll(
+    teacherId?: string,
+    filters?: {
+      classroomId?: string;
+      subjectId?: string;
+      schoolYearId?: string;
+      status?: string;
+    },
+  ) {
     const where: any = {};
     if (teacherId) {
       where.teacherId = teacherId;
@@ -30,17 +31,11 @@ export class TeachingPlansService {
     if (filters?.subjectId) {
       where.subjectId = filters.subjectId;
     }
+    if (filters?.schoolYearId) {
+      where.schoolYearId = filters.schoolYearId;
+    }
     if (filters?.status) {
       where.status = filters.status;
-    }
-    if (filters?.dateFrom || filters?.dateTo) {
-      where.plannedDate = {};
-      if (filters?.dateFrom) {
-        where.plannedDate.gte = new Date(filters.dateFrom);
-      }
-      if (filters?.dateTo) {
-        where.plannedDate.lte = new Date(filters.dateTo + 'T23:59:59');
-      }
     }
 
     const plans = await this.prisma.teachingPlan.findMany({
@@ -49,10 +44,10 @@ export class TeachingPlansService {
         classroom: { include: { grade: true } },
         subject: true,
         schoolYear: true,
+        lesson: true,
       },
       orderBy: [
-        { plannedDate: 'asc' },
-        { startTime: 'asc' },
+        { weekNumber: 'asc' },
         { createdAt: 'desc' },
       ],
     });
@@ -67,15 +62,16 @@ export class TeachingPlansService {
         classroom: { include: { grade: true } },
         subject: true,
         schoolYear: true,
+        lesson: true,
       },
     });
 
     if (!plan) {
-      throw new NotFoundException(`Không tìm thấy lịch dạy ${id}`);
+      throw new NotFoundException(`Không tìm thấy kế hoạch dạy học ${id}`);
     }
 
     if (teacherId && plan.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền truy cập lịch dạy này');
+      throw new ForbiddenException('Bạn không có quyền truy cập kế hoạch dạy học này');
     }
 
     return this.mapTeachingPlan(plan);
@@ -87,7 +83,7 @@ export class TeachingPlansService {
       where: { id: dto.classroomId },
     });
     if (!classroom || classroom.deletedAt || classroom.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
+      throw new ForbiddenException('Bạn không có quyền tạo kế hoạch cho lớp học này');
     }
 
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
@@ -108,48 +104,6 @@ export class TeachingPlansService {
       throw new BadRequestException('Không tìm thấy năm học hợp lệ');
     }
 
-    // Validate time range
-    if (dto.startTime && dto.endTime) {
-      if (dto.startTime >= dto.endTime) {
-        throw new BadRequestException('Giờ bắt đầu phải nhỏ hơn giờ kết thúc');
-      }
-    }
-
-    // Check for time overlap on same date (for teacher OR classroom)
-    if (dto.plannedDate && dto.startTime && dto.endTime) {
-      const dayStart = new Date(dto.plannedDate + 'T00:00:00');
-      const dayEnd = new Date(dto.plannedDate + 'T23:59:59');
-
-      const existingPlans = await this.prisma.teachingPlan.findMany({
-        where: {
-          OR: [
-            { teacherId },
-            { classroomId: dto.classroomId },
-          ],
-          plannedDate: { gte: dayStart, lte: dayEnd },
-          startTime: { not: null },
-          endTime: { not: null },
-        },
-      });
-
-      for (const existing of existingPlans) {
-        if (existing.startTime && existing.endTime) {
-          // Check actual overlap: startA < endB AND endA > startB
-          if (dto.startTime < existing.endTime && dto.endTime > existing.startTime) {
-            const isTeacherConflict = existing.teacherId === teacherId;
-            const conflictTitle = existing.title || 'tiết dạy khác';
-            throw new ConflictException(
-              isTeacherConflict
-                ? `Bạn đã có lịch dạy "${conflictTitle}" từ ${existing.startTime} đến ${existing.endTime} vào ngày này. Vui lòng chọn giờ khác.`
-                : `Lớp ${classroom.name} đã có lịch học từ ${existing.startTime} đến ${existing.endTime} vào ngày này.`,
-            );
-          }
-        }
-      }
-    }
-
-    const plannedDate = dto.plannedDate ? new Date(dto.plannedDate) : null;
-
     const plan = await this.prisma.teachingPlan.create({
       data: {
         teacherId,
@@ -160,12 +114,8 @@ export class TeachingPlansService {
         title: dto.title.trim(),
         subtitle: dto.subtitle || `${subject.name} · ${classroom.name}`,
         status: dto.status || 'PLANNED',
-        room: dto.room?.trim() || null,
         weekNumber: dto.weekNumber || 1,
-        plannedDate,
-        startTime: dto.startTime || null,
-        endTime: dto.endTime || null,
-        notes: dto.notes?.trim() || null,
+        numberOfPeriods: dto.numberOfPeriods || 1,
         meta: dto.meta || null,
         tone: dto.tone || 'teal',
       },
@@ -173,6 +123,7 @@ export class TeachingPlansService {
         classroom: { include: { grade: true } },
         subject: true,
         schoolYear: true,
+        lesson: true,
       },
     });
 
@@ -180,57 +131,16 @@ export class TeachingPlansService {
   }
 
   async update(id: string, dto: UpdateTeachingPlanDto, teacherId: string) {
-    const existingPlan = await this.prisma.teachingPlan.findUnique({
+    const existing = await this.prisma.teachingPlan.findUnique({
       where: { id },
     });
 
-    if (!existingPlan) {
-      throw new NotFoundException(`Không tìm thấy lịch dạy ${id}`);
+    if (!existing) {
+      throw new NotFoundException(`Không tìm thấy kế hoạch dạy học ${id}`);
     }
 
-    if (existingPlan.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền chỉnh sửa lịch dạy này');
-    }
-
-    // Validate time range if provided or partially updated
-    const startTime = dto.startTime !== undefined ? dto.startTime : existingPlan.startTime;
-    const endTime = dto.endTime !== undefined ? dto.endTime : existingPlan.endTime;
-    if (startTime && endTime && startTime >= endTime) {
-      throw new BadRequestException('Giờ bắt đầu phải nhỏ hơn giờ kết thúc');
-    }
-
-    const targetDate = dto.plannedDate
-      ? new Date(dto.plannedDate)
-      : existingPlan.plannedDate;
-
-    // Check overlap if date & time are set
-    if (targetDate && startTime && endTime) {
-      const dateIso = targetDate.toISOString().split('T')[0];
-      const dayStart = new Date(dateIso + 'T00:00:00');
-      const dayEnd = new Date(dateIso + 'T23:59:59');
-
-      const overlapping = await this.prisma.teachingPlan.findMany({
-        where: {
-          id: { not: id },
-          OR: [
-            { teacherId },
-            { classroomId: existingPlan.classroomId },
-          ],
-          plannedDate: { gte: dayStart, lte: dayEnd },
-          startTime: { not: null },
-          endTime: { not: null },
-        },
-      });
-
-      for (const s of overlapping) {
-        if (s.startTime && s.endTime) {
-          if (startTime < s.endTime && endTime > s.startTime) {
-            throw new ConflictException(
-              `Đã có lịch dạy "${s.title || 'tiết dạy'}" từ ${s.startTime} đến ${s.endTime} vào ngày này (trùng thời gian).`,
-            );
-          }
-        }
-      }
+    if (existing.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền chỉnh sửa kế hoạch dạy học này');
     }
 
     const updated = await this.prisma.teachingPlan.update({
@@ -241,17 +151,15 @@ export class TeachingPlansService {
         status: dto.status,
         meta: dto.meta,
         tone: dto.tone,
-        room: dto.room?.trim(),
         weekNumber: dto.weekNumber,
-        plannedDate: dto.plannedDate ? new Date(dto.plannedDate) : undefined,
-        startTime: dto.startTime,
-        endTime: dto.endTime,
-        notes: dto.notes?.trim(),
+        numberOfPeriods: dto.numberOfPeriods,
+        lessonId: dto.lessonId,
       },
       include: {
         classroom: { include: { grade: true } },
         subject: true,
         schoolYear: true,
+        lesson: true,
       },
     });
 
@@ -265,44 +173,48 @@ export class TeachingPlansService {
       where: { id },
     });
 
-    return { success: true, message: 'Đã xóa lịch dạy' };
+    return { success: true, message: 'Đã xóa kế hoạch dạy học' };
   }
 
   private mapTeachingPlan(p: any) {
     return {
       id: p.id,
       teacherId: p.teacherId,
-      title: p.title || 'Tiết dạy',
+      title: p.title || 'Kế hoạch dạy học',
       subtitle: p.subtitle || `${p.subject?.name || 'Môn học'} · ${p.classroom?.name || 'Lớp học'}`,
       status: p.status || 'PLANNED',
-      room: p.room || null,
-      notes: p.notes || null,
       meta: p.meta || null,
       tone: p.tone || 'teal',
       weekNumber: p.weekNumber || 1,
-      plannedDate: p.plannedDate ? p.plannedDate.toISOString().split('T')[0] : null, // YYYY-MM-DD
-      startTime: p.startTime || null,
-      endTime: p.endTime || null,
+      numberOfPeriods: p.numberOfPeriods || 1,
       classroomId: p.classroomId,
-      classroom: p.classroom ? {
-        id: p.classroom.id,
-        name: p.classroom.name,
-        code: p.classroom.code,
-        gradeName: p.classroom.grade?.name || null,
-        room: p.classroom.room || null,
-      } : undefined,
+      classroom: p.classroom
+        ? {
+            id: p.classroom.id,
+            name: p.classroom.name,
+            code: p.classroom.code,
+            gradeName: p.classroom.grade?.name || null,
+            room: p.classroom.room || null,
+          }
+        : undefined,
       subjectId: p.subjectId,
-      subject: p.subject ? {
-        id: p.subject.id,
-        name: p.subject.name,
-        code: p.subject.code,
-      } : undefined,
+      subject: p.subject
+        ? {
+            id: p.subject.id,
+            name: p.subject.name,
+            code: p.subject.code,
+          }
+        : undefined,
       schoolYearId: p.schoolYearId,
-      schoolYear: p.schoolYear ? {
-        id: p.schoolYear.id,
-        name: p.schoolYear.name,
-        isCurrent: p.schoolYear.isCurrent,
-      } : undefined,
+      schoolYear: p.schoolYear
+        ? {
+            id: p.schoolYear.id,
+            name: p.schoolYear.name,
+            isCurrent: p.schoolYear.isCurrent,
+          }
+        : undefined,
+      lessonId: p.lessonId || null,
+      lesson: p.lesson ? { id: p.lesson.id, title: p.lesson.title } : undefined,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
     };

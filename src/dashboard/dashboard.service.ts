@@ -137,36 +137,50 @@ export class DashboardService {
     const completedTasksCount = tasks.filter((t) => t.done).length;
     const taskPercent = tasks.length > 0 ? Math.round((completedTasksCount / tasks.length) * 100) : 0;
 
-    // 8. Teaching plans / Today's lessons
-    const teachingPlans = await this.prisma.teachingPlan.findMany({
+    // 8. Schedules / Today's lessons
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const todaySchedules = await this.prisma.schedule.findMany({
       where: {
         ...(teacherId ? { teacherId } : {}),
-        classroom: {
-          isActive: true,
-          deletedAt: null,
-          ...(currentSchoolYear ? { schoolYearId: currentSchoolYear.id } : {}),
-        },
+        deletedAt: null,
+        plannedDate: { gte: todayStart, lte: todayEnd },
       },
       include: {
         classroom: true,
         subject: true,
-        lesson: true,
       },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
+      orderBy: { startTime: 'asc' },
+      take: 6,
     });
 
-    const lessons = teachingPlans.map((tp, i) => {
-      const timeSlots = ['07:30', '08:20', '09:15', '10:05', '14:00', '14:50'];
-      return {
-        time: timeSlots[i] || `${7 + i}:30`,
-        subject: tp.subject?.name || 'Chung',
-        title: tp.title || tp.lesson?.title || `Kế hoạch ${i + 1}`,
-        className: tp.classroom?.name || 'Lớp',
-        room: tp.room || tp.classroom?.room || 'Phòng học',
-        color: i % 3 === 0 ? 'teal' : i % 3 === 1 ? 'orange' : 'blue',
-      };
-    });
+    const schedulesList =
+      todaySchedules.length > 0
+        ? todaySchedules
+        : await this.prisma.schedule.findMany({
+            where: {
+              ...(teacherId ? { teacherId } : {}),
+              deletedAt: null,
+            },
+            include: {
+              classroom: true,
+              subject: true,
+            },
+            orderBy: [{ plannedDate: 'asc' }, { startTime: 'asc' }],
+            take: 5,
+          });
+
+    const lessons = schedulesList.map((s, i) => ({
+      time: s.startTime || '07:30',
+      subject: s.subject?.name || 'Môn học',
+      title: s.title || `Tiết học ${i + 1}`,
+      className: s.classroom?.name || 'Lớp',
+      room: s.room || s.classroom?.room || 'Phòng học',
+      color: i % 3 === 0 ? 'teal' : i % 3 === 1 ? 'orange' : 'blue',
+    }));
 
     // 9. Class progress for primary/homeroom class
     let classProgress = {

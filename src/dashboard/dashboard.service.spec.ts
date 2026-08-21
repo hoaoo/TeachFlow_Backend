@@ -34,6 +34,9 @@ describe('DashboardService', () => {
     teachingPlan: {
       findMany: jest.fn(),
     },
+    schedule: {
+      findMany: jest.fn(),
+    },
     attendanceSession: {
       findMany: jest.fn(),
     },
@@ -113,14 +116,14 @@ describe('DashboardService', () => {
         { id: 't-1', title: 'Soạn giáo án', dueDate: '2026-08-25', done: true, priority: 'HIGH' },
         { id: 't-2', title: 'Điểm danh', dueDate: '2026-08-22', done: false, priority: 'MEDIUM' },
       ]);
-      mockPrismaService.teachingPlan.findMany.mockResolvedValue([
+      mockPrismaService.schedule.findMany.mockResolvedValue([
         {
-          id: 'tp-1',
+          id: 's-1',
           title: 'Phân số bằng nhau',
+          startTime: '07:30',
           room: 'Phòng 204',
           subject: { name: 'Toán' },
           classroom: { name: '4A', room: 'Phòng 204' },
-          lesson: { title: 'Bài 1: Phân số' },
         },
       ]);
       mockPrismaService.attendanceSession.findMany.mockResolvedValue([
@@ -172,7 +175,7 @@ describe('DashboardService', () => {
       mockPrismaService.classroom.findMany.mockResolvedValue([]);
       mockPrismaService.lessonPlan.count.mockResolvedValue(0);
       mockPrismaService.teacherTask.findMany.mockResolvedValue([]);
-      mockPrismaService.teachingPlan.findMany.mockResolvedValue([]);
+      mockPrismaService.schedule.findMany.mockResolvedValue([]);
 
       const result = await service.getDashboardData({
         userId: 'user-2',
