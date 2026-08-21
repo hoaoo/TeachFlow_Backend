@@ -100,9 +100,23 @@ export class StudentsService {
     }
 
     if (teacherId) {
-      const hasAccess = student.classStudents.some(
+      const classStudentClassIds = student.classStudents.map((cs) => cs.classroomId);
+      const isHomeroom = student.classStudents.some(
         (cs) => cs.classroom.teacherId === teacherId,
       );
+
+      let hasAccess = isHomeroom;
+      if (!hasAccess && classStudentClassIds.length > 0) {
+        const assignedCount = await this.prisma.teachingAssignment.count({
+          where: {
+            teacherId,
+            classroomId: { in: classStudentClassIds },
+            isActive: true,
+          },
+        });
+        hasAccess = assignedCount > 0;
+      }
+
       if (!hasAccess) {
         throw new ForbiddenException('Bạn không có quyền truy cập thông tin học sinh này');
       }

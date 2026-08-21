@@ -158,6 +158,10 @@ export class StudentEnrollmentsService {
       );
     }
 
+    if (currentTeacherId && classroom.teacherId !== currentTeacherId) {
+      throw new ForbiddenException('Bạn không có quyền ghi danh học sinh vào lớp học này');
+    }
+
     // 5. Check if active enrollment already exists in this school year (pre-check for clean error)
     const existingActive = await this.prisma.studentEnrollment.findFirst({
       where: {
@@ -265,6 +269,16 @@ export class StudentEnrollmentsService {
           throw new BadRequestException(
             `Không thể chuyển lớp cho bản ghi ghi danh có trạng thái "${source.status}". Chỉ bản ghi ACTIVE mới có thể chuyển lớp.`,
           );
+        }
+
+        if (currentTeacherId) {
+          const sourceClassroom = await tx.classroom.findUnique({
+            where: { id: source.classroomId },
+          });
+
+          if (sourceClassroom?.teacherId !== currentTeacherId) {
+            throw new ForbiddenException('Bạn không có quyền chuyển học sinh từ lớp học này');
+          }
         }
 
         // 2. Validate target classroom
@@ -406,6 +420,10 @@ export class StudentEnrollmentsService {
 
       if (!source) {
         throw new NotFoundException(`Không tìm thấy thông tin ghi danh với mã ${id}`);
+      }
+
+      if (currentTeacherId && source.classroom.teacherId !== currentTeacherId) {
+        throw new ForbiddenException('Bạn không có quyền rút học sinh khỏi lớp học này');
       }
 
       if (source.status !== EnrollmentStatus.ACTIVE) {

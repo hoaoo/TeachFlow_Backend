@@ -93,7 +93,22 @@ export class HomeroomService {
         orderBy: { name: 'asc' },
       });
       if (!firstClass) {
-        throw new NotFoundException('Bạn chưa phụ trách lớp học nào');
+        return {
+          classroom: null,
+          studentCount: 0,
+          attendanceToday: {
+            isRecorded: false,
+            total: 0,
+            present: 0,
+            excusedAbsence: 0,
+            unexcusedAbsence: 0,
+            late: 0,
+          },
+          studentsNeedAttention: [],
+          upcomingBirthdays: [],
+          recentBehavior: [],
+          recentEvents: [],
+        };
       }
       classroomId = firstClass.id;
     }
