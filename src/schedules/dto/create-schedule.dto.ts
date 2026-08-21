@@ -1,4 +1,4 @@
-﻿import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsString,
   IsNotEmpty,
@@ -55,8 +55,12 @@ export class CreateScheduleDto {
   @IsOptional()
   notes?: string;
 
-  @ApiPropertyOptional({ description: 'Trạng thái tiết dạy', example: 'PLANNED', enum: ['PLANNED', 'TAUGHT', 'CANCELLED'] })
+  @ApiPropertyOptional({ description: 'Trạng thái tiết dạy', example: 'PLANNED', enum: ['PLANNED', 'IN_PROGRESS', 'TAUGHT', 'CANCELLED'] })
   @IsString()
   @IsOptional()
   status?: string;
+
+  @ApiPropertyOptional({ description: 'Cờ đánh dấu trạng thái được giáo viên cập nhật thủ công', example: false })
+  @IsOptional()
+  isManualStatus?: boolean;
 }

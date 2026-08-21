@@ -377,10 +377,11 @@ model Schedule {
   endTime      String    // HH:MM format, e.g. "07:45"
   room         String?
   notes        String?
-  status       String    @default("PLANNED") // PLANNED, TAUGHT, CANCELLED
-  deletedAt    DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  status         String    @default("PLANNED") // PLANNED, IN_PROGRESS, TAUGHT, CANCELLED
+  isManualStatus Boolean   @default(false)
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   teacher    Teacher    @relation(fields: [teacherId], references: [id])
   schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id])
@@ -702,14 +703,19 @@ model TeacherTask {
   teacherId   String
   title       String
   description String?      @db.Text
+  taskDate    String?      // YYYY-MM-DD in Asia/Ho_Chi_Minh
   dueDate     String?
   priority    TaskPriority @default(MEDIUM)
   status      TaskStatus   @default(PENDING)
   done        Boolean      @default(false)
+  completedAt DateTime?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   teacher Teacher @relation(fields: [teacherId], references: [id])
+
+  @@index([teacherId, taskDate])
+  @@index([teacherId, createdAt])
 }
 
 model AdminAuditLog {

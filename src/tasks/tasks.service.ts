@@ -5,20 +5,34 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto, UpdateTaskDto } from './dto/create-task.dto';
+import { getTodayVNRange } from './tasks-cleanup.service';
 
 @Injectable()
 export class TasksService {
   constructor(private prisma: PrismaService) {}
 
   async findAll(teacherId?: string) {
-    const where: any = {};
+    const { todayStr, startOfDayUTC, endOfDayUTC } = getTodayVNRange();
+
+    const where: any = {
+      OR: [
+        { taskDate: todayStr },
+        {
+          AND: [
+            { taskDate: null },
+            { createdAt: { gte: startOfDayUTC, lte: endOfDayUTC } },
+          ],
+        },
+      ],
+    };
+
     if (teacherId) {
       where.teacherId = teacherId;
     }
 
     const tasks = await this.prisma.teacherTask.findMany({
       where,
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ done: 'asc' }, { createdAt: 'asc' }],
     });
 
     return tasks.map((t) => ({
@@ -26,16 +40,25 @@ export class TasksService {
       title: t.title,
       due: t.dueDate || 'Hôm nay',
       done: t.done,
+      taskDate: t.taskDate,
+      priority: t.priority,
+      completedAt: t.completedAt,
     }));
   }
 
   async create(dto: CreateTaskDto, teacherId: string) {
+    const { todayStr } = getTodayVNRange();
+    const isDone = Boolean(dto.done);
+
     const task = await this.prisma.teacherTask.create({
       data: {
         teacherId,
-        title: dto.title,
-        dueDate: dto.due || 'Hôm nay',
-        done: dto.done || false,
+        title: dto.title.trim(),
+        taskDate: todayStr,
+        dueDate: dto.due?.trim() || 'Hôm nay',
+        done: isDone,
+        status: isDone ? 'COMPLETED' : 'PENDING',
+        completedAt: isDone ? new Date() : null,
       },
     });
 
@@ -44,6 +67,9 @@ export class TasksService {
       title: task.title,
       due: task.dueDate,
       done: task.done,
+      taskDate: task.taskDate,
+      priority: task.priority,
+      completedAt: task.completedAt,
     };
   }
 
@@ -58,11 +84,12 @@ export class TasksService {
     }
 
     const data: any = {};
-    if (dto.title !== undefined) data.title = dto.title;
-    if (dto.due !== undefined) data.dueDate = dto.due;
+    if (dto.title !== undefined) data.title = dto.title.trim();
+    if (dto.due !== undefined) data.dueDate = dto.due.trim();
     if (dto.done !== undefined) {
       data.done = dto.done;
       data.status = dto.done ? 'COMPLETED' : 'PENDING';
+      data.completedAt = dto.done ? new Date() : null;
     }
 
     const updated = await this.prisma.teacherTask.update({
@@ -75,6 +102,9 @@ export class TasksService {
       title: updated.title,
       due: updated.dueDate,
       done: updated.done,
+      taskDate: updated.taskDate,
+      priority: updated.priority,
+      completedAt: updated.completedAt,
     };
   }
 

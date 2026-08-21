@@ -231,11 +231,19 @@ export class SchedulesService {
       }
     }
 
+    const isManual =
+      dto.isManualStatus !== undefined
+        ? dto.isManualStatus
+        : dto.status !== undefined
+          ? true
+          : undefined;
+
     const updated = await this.prisma.schedule.update({
       where: { id },
       data: {
         title: dto.title?.trim(),
         status: dto.status,
+        isManualStatus: isManual,
         room: dto.room?.trim(),
         plannedDate: dto.plannedDate ? new Date(dto.plannedDate + 'T00:00:00') : undefined,
         startTime: dto.startTime,
@@ -268,6 +276,7 @@ export class SchedulesService {
       teacherId: s.teacherId,
       title: s.title,
       status: s.status || 'PLANNED',
+      isManualStatus: Boolean(s.isManualStatus),
       room: s.room || null,
       notes: s.notes || null,
       plannedDate: s.plannedDate ? s.plannedDate.toISOString().split('T')[0] : null,

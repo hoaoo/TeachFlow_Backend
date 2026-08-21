@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { getTodayVNRange } from '../tasks/tasks-cleanup.service';
 
 @Injectable()
 export class DashboardService {
@@ -117,44 +118,52 @@ export class DashboardService {
       },
     });
 
-    // 7. Teacher tasks
+    // 7. Teacher tasks (filtered for today in Asia/Ho_Chi_Minh)
+    const { todayStr, startOfDayUTC, endOfDayUTC } = getTodayVNRange();
+
     const dbTasks = teacherId
       ? await this.prisma.teacherTask.findMany({
-          where: { teacherId },
-          orderBy: [{ done: 'asc' }, { dueDate: 'asc' }, { createdAt: 'desc' }],
-          take: 10,
+          where: {
+            teacherId,
+            OR: [
+              { taskDate: todayStr },
+              {
+                AND: [
+                  { taskDate: null },
+                  { createdAt: { gte: startOfDayUTC, lte: endOfDayUTC } },
+                ],
+              },
+            ],
+          },
+          orderBy: [{ done: 'asc' }, { createdAt: 'asc' }],
         })
       : [];
 
     const tasks = dbTasks.map((t) => ({
       id: t.id,
       title: t.title,
-      due: t.dueDate || 'Chưa đặt hạn',
+      due: t.dueDate || 'Hôm nay',
       done: t.done,
       priority: t.priority,
+      taskDate: t.taskDate,
+      completedAt: t.completedAt,
     }));
 
     const completedTasksCount = tasks.filter((t) => t.done).length;
     const taskPercent = tasks.length > 0 ? Math.round((completedTasksCount / tasks.length) * 100) : 0;
 
     // 8. Schedules / Today's lessons
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
     const todaySchedules = await this.prisma.schedule.findMany({
       where: {
         ...(teacherId ? { teacherId } : {}),
         deletedAt: null,
-        plannedDate: { gte: todayStart, lte: todayEnd },
+        plannedDate: { gte: startOfDayUTC, lte: endOfDayUTC },
       },
       include: {
-        classroom: true,
+        classroom: { include: { grade: true } },
         subject: true,
       },
       orderBy: { startTime: 'asc' },
-      take: 6,
     });
 
     const schedulesList =
@@ -166,18 +175,25 @@ export class DashboardService {
               deletedAt: null,
             },
             include: {
-              classroom: true,
+              classroom: { include: { grade: true } },
               subject: true,
             },
             orderBy: [{ plannedDate: 'asc' }, { startTime: 'asc' }],
-            take: 5,
+            take: 6,
           });
 
     const lessons = schedulesList.map((s, i) => ({
-      time: s.startTime || '07:30',
+      id: s.id,
+      time: s.startTime && s.endTime ? `${s.startTime} - ${s.endTime}` : s.startTime || '07:30',
+      startTime: s.startTime || '07:00',
+      endTime: s.endTime || '07:45',
+      plannedDate: s.plannedDate ? s.plannedDate.toISOString().split('T')[0] : todayStr,
+      status: s.status || 'PLANNED',
+      isManualStatus: Boolean(s.isManualStatus),
       subject: s.subject?.name || 'Môn học',
       title: s.title || `Tiết học ${i + 1}`,
       className: s.classroom?.name || 'Lớp',
+      gradeName: s.classroom?.grade?.name || null,
       room: s.room || s.classroom?.room || 'Phòng học',
       color: i % 3 === 0 ? 'teal' : i % 3 === 1 ? 'orange' : 'blue',
     }));
