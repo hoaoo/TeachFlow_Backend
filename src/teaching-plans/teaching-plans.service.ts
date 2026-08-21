@@ -2,6 +2,8 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTeachingPlanDto } from './dto/create-teaching-plan.dto';
@@ -59,45 +61,53 @@ export class TeachingPlansService {
       if (!cls || cls.deletedAt || cls.teacherId !== teacherId) {
         throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
       }
+      schoolYearId = schoolYearId || cls.schoolYearId;
     } else {
       const cls = await this.prisma.classroom.findFirst({
         where: { teacherId, deletedAt: null },
+        orderBy: { createdAt: 'desc' },
       });
-      classroomId = cls?.id;
+      if (!cls) {
+        throw new BadRequestException('Vui lòng tạo lớp học trước khi tạo kế hoạch dạy học');
+      }
+      classroomId = cls.id;
+      schoolYearId = schoolYearId || cls.schoolYearId;
     }
 
     if (!subjectId) {
-      const sub = await this.prisma.subject.findFirst();
-      subjectId = sub?.id;
+      const sub = await this.prisma.subject.findFirst({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (sub) {
+        subjectId = sub.id;
+      }
     }
 
     if (!schoolYearId) {
       const sy = await this.prisma.schoolYear.findFirst({
-        where: { isCurrent: true },
+        where: { isCurrent: true, isActive: true },
       });
       schoolYearId = sy?.id;
     }
 
     if (!classroomId || !subjectId || !schoolYearId) {
-      // Create fallback if DB empty
-      const sy = await this.prisma.schoolYear.create({
-        data: { name: '2026 - 2027', startDate: new Date('2026-09-01'), endDate: new Date('2027-05-31'), isCurrent: true },
-      });
-      schoolYearId = sy.id;
+      throw new BadRequestException('Thiếu thông tin lớp học, môn học hoặc năm học');
+    }
 
-      const sub = await this.prisma.subject.create({
-        data: { code: 'MATH', name: 'Toán' },
-      });
-      subjectId = sub.id;
+    const existing = this.prisma.teachingPlan.findFirst
+      ? await this.prisma.teachingPlan.findFirst({
+          where: {
+            teacherId,
+            classroomId,
+            subjectId,
+            title: dto.title.trim(),
+          },
+        })
+      : null;
 
-      const grade = await this.prisma.grade.create({
-        data: { name: 'Khối 4', level: 4 },
-      });
-
-      const cls = await this.prisma.classroom.create({
-        data: { code: '4A', name: 'Lớp 4A', gradeId: grade.id, schoolYearId, teacherId, room: 'Phòng 204' },
-      });
-      classroomId = cls.id;
+    if (existing) {
+      throw new ConflictException(`Kế hoạch dạy học "${dto.title.trim()}" đã tồn tại cho lớp và môn học này`);
     }
 
     const plan = await this.prisma.teachingPlan.create({
@@ -106,12 +116,12 @@ export class TeachingPlansService {
         classroomId,
         subjectId,
         schoolYearId,
-        title: dto.title,
-        subtitle: dto.subtitle || 'Toán · Lớp 4A',
+        title: dto.title.trim(),
+        subtitle: dto.subtitle || 'Kế hoạch giảng dạy',
         status: dto.status || 'Đã lên lịch',
-        meta: dto.meta || '07:30 · Phòng 204',
+        meta: dto.meta || '07:30 · Phòng học',
         tone: dto.tone || 'teal',
-        room: dto.room || 'Phòng 204',
+        room: dto.room || 'Phòng học',
         weekNumber: dto.weekNumber || 1,
       },
     });
