@@ -330,7 +330,7 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
 
       await expect(
         teachingPlansService.create(
-          { title: 'Plan', classroomId: 'class-B' },
+          { title: 'Plan', classroomId: 'class-B', subjectId: 'subject-1' },
           teacherAId,
         ),
       ).rejects.toThrow(ForbiddenException);

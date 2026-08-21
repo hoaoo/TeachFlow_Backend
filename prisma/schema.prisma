@@ -373,6 +373,9 @@ model TeachingPlan {
   room            String?
   weekNumber      Int       @default(1)
   plannedDate     DateTime?
+  startTime       String?   // HH:MM format, e.g. "07:00"
+  endTime         String?   // HH:MM format, e.g. "07:45"
+  notes           String?
   numberOfPeriods Int       @default(1)
   status          String    @default("PLANNED")
   meta            String?
