@@ -142,17 +142,16 @@ export class AssessmentsService {
     }
 
     if (!effectiveClassroomId) {
-      const sy = (await this.prisma.schoolYear.findFirst()) || (await this.prisma.schoolYear.create({
-        data: { name: '2026 - 2027', startDate: new Date('2026-09-01'), endDate: new Date('2027-05-31') },
-      }));
-      const grade = (await this.prisma.grade.findFirst()) || (await this.prisma.grade.create({
-        data: { name: 'Khối 4', level: 4 },
-      }));
-      const cls = await this.prisma.classroom.create({
-        data: { code: '4A', name: 'Lớp 4A', gradeId: grade.id, schoolYearId: sy.id, teacherId },
+      const teacherClass = await this.prisma.classroom.findFirst({
+        where: { teacherId, deletedAt: null },
+        orderBy: { createdAt: 'desc' },
       });
-      effectiveClassroomId = cls.id;
-      effectiveSchoolYearId = sy.id;
+      if (teacherClass) {
+        effectiveClassroomId = teacherClass.id;
+        effectiveSchoolYearId = teacherClass.schoolYearId;
+      } else {
+        throw new BadRequestException('Vui lòng chọn hoặc tạo lớp học trước khi tạo bài đánh giá');
+      }
     }
 
     if (effectiveSchoolYearId && this.prisma.schoolYear) {
@@ -162,6 +161,20 @@ export class AssessmentsService {
       if (sy && !sy.isActive) {
         throw new BadRequestException('Không thể tạo đánh giá cho năm học đã ngừng hoạt động');
       }
+    }
+
+    const existing = this.prisma.assessment.findFirst
+      ? await this.prisma.assessment.findFirst({
+          where: {
+            teacherId,
+            classroomId: effectiveClassroomId,
+            title: dto.title.trim(),
+            deletedAt: null,
+          },
+        })
+      : null;
+    if (existing) {
+      throw new ConflictException(`Đánh giá "${dto.title.trim()}" đã tồn tại trong lớp học này`);
     }
 
     const assessment = await this.prisma.assessment.create({
