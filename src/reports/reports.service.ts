@@ -27,11 +27,9 @@ export class ReportsService {
   }
 
   private async validateClassroomAccess(classroomId: string, user: AuthenticatedUser): Promise<void> {
-    if (user.role === 'ADMIN') return;
-
     const teacherId = await this.getTeacherId(user);
     if (!teacherId) {
-      throw new ForbiddenException('Tài khoản không có hồ sơ giáo viên để truy cập lớp này');
+      throw new ForbiddenException('Tài khoản không có hồ sơ giáo viên để truy cập báo cáo này');
     }
 
     const classroom = await this.prisma.classroom.findFirst({
@@ -56,6 +54,9 @@ export class ReportsService {
    */
   async getAttendanceReport(filter: ReportFilterDto, user: AuthenticatedUser) {
     const teacherId = await this.getTeacherId(user);
+    if (!teacherId) {
+      throw new ForbiddenException('Yêu cầu tài khoản giáo viên để xem báo cáo');
+    }
 
     if (filter.classroomId) {
       await this.validateClassroomAccess(filter.classroomId, user);
@@ -66,7 +67,7 @@ export class ReportsService {
 
     if (filter.classroomId) {
       sessionWhere.classroomId = filter.classroomId;
-    } else if (user.role !== 'ADMIN' && teacherId) {
+    } else {
       // Limit to teacher's classes
       sessionWhere.classroom = {
         isActive: true,
@@ -171,6 +172,9 @@ export class ReportsService {
    */
   async getAssessmentReport(filter: ReportFilterDto, user: AuthenticatedUser) {
     const teacherId = await this.getTeacherId(user);
+    if (!teacherId) {
+      throw new ForbiddenException('Yêu cầu tài khoản giáo viên để xem báo cáo');
+    }
 
     if (filter.classroomId) {
       await this.validateClassroomAccess(filter.classroomId, user);
@@ -179,7 +183,7 @@ export class ReportsService {
     const whereClause: any = {};
     if (filter.classroomId) {
       whereClause.classroomId = filter.classroomId;
-    } else if (user.role !== 'ADMIN' && teacherId) {
+    } else {
       whereClause.classroom = {
         isActive: true,
         deletedAt: null,
@@ -367,18 +371,11 @@ export class ReportsService {
    */
   async getTeachingAssignmentsReport(filter: ReportFilterDto, user: AuthenticatedUser) {
     const teacherId = await this.getTeacherId(user);
-
-    const whereClause: any = { isActive: true };
-
-    if (filter.schoolYearId) {
-      whereClause.schoolYearId = filter.schoolYearId;
+    if (!teacherId) {
+      throw new ForbiddenException('Yêu cầu tài khoản giáo viên để xem báo cáo');
     }
 
-    if (user.role !== 'ADMIN' && teacherId) {
-      whereClause.teacherId = teacherId;
-    } else if (filter.teacherId) {
-      whereClause.teacherId = filter.teacherId;
-    }
+    const whereClause: any = { isActive: true, teacherId };
 
     if (filter.classroomId) {
       whereClause.classroomId = filter.classroomId;
@@ -439,6 +436,11 @@ export class ReportsService {
    * 5. STUDENT ENROLLMENT REPORT
    */
   async getStudentEnrollmentReport(filter: ReportFilterDto, user: AuthenticatedUser) {
+    const teacherId = await this.getTeacherId(user);
+    if (!teacherId) {
+      throw new ForbiddenException('Yêu cầu tài khoản giáo viên để xem báo cáo');
+    }
+
     const whereClause: any = {};
 
     if (filter.schoolYearId) {
@@ -448,15 +450,12 @@ export class ReportsService {
     if (filter.classroomId) {
       await this.validateClassroomAccess(filter.classroomId, user);
       whereClause.classroomId = filter.classroomId;
-    } else if (user.role !== 'ADMIN') {
-      const teacherId = await this.getTeacherId(user);
-      if (teacherId) {
-        whereClause.classroom = {
-          isActive: true,
-          deletedAt: null,
-          teacherId,
-        };
-      }
+    } else {
+      whereClause.classroom = {
+        isActive: true,
+        deletedAt: null,
+        teacherId,
+      };
     }
 
     const enrollments = await this.prisma.studentEnrollment.findMany({

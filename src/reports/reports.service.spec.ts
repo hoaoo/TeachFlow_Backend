@@ -64,9 +64,10 @@ describe('ReportsService', () => {
       ]);
 
       const result = await service.getAttendanceReport({}, {
-        userId: 'admin-1',
-        email: 'admin@teachflow.vn',
-        role: 'ADMIN',
+        userId: 'teacher-1',
+        email: 'teacher@teachflow.vn',
+        role: 'TEACHER',
+        teacherId: 't-1',
       });
 
       expect(result.summary.totalSessions).toBe(1);
@@ -83,9 +84,10 @@ describe('ReportsService', () => {
       mockPrismaService.attendanceSession.findMany.mockResolvedValue([]);
 
       const csv = await service.exportAttendanceReportCsv({}, {
-        userId: 'admin-1',
-        email: 'admin@teachflow.vn',
-        role: 'ADMIN',
+        userId: 'teacher-1',
+        email: 'teacher@teachflow.vn',
+        role: 'TEACHER',
+        teacherId: 't-1',
       });
 
       expect(csv.startsWith('\uFEFF')).toBe(true);
@@ -113,9 +115,10 @@ describe('ReportsService', () => {
       ]);
 
       const result = await service.getAssessmentReport({}, {
-        userId: 'admin-1',
-        email: 'admin@teachflow.vn',
-        role: 'ADMIN',
+        userId: 'teacher-1',
+        email: 'teacher@teachflow.vn',
+        role: 'TEACHER',
+        teacherId: 't-1',
       });
 
       expect(result.summary.totalAssessments).toBe(1);
@@ -196,9 +199,10 @@ describe('ReportsService', () => {
       ]);
 
       const result = await service.getTeachingAssignmentsReport({}, {
-        userId: 'admin-1',
-        email: 'admin@teachflow.vn',
-        role: 'ADMIN',
+        userId: 'teacher-1',
+        email: 'teacher@teachflow.vn',
+        role: 'TEACHER',
+        teacherId: 't-1',
       });
 
       expect(result.totalAssignments).toBe(1);
@@ -230,9 +234,10 @@ describe('ReportsService', () => {
       ]);
 
       const result = await service.getStudentEnrollmentReport({}, {
-        userId: 'admin-1',
-        email: 'admin@teachflow.vn',
-        role: 'ADMIN',
+        userId: 'teacher-1',
+        email: 'teacher@teachflow.vn',
+        role: 'TEACHER',
+        teacherId: 't-1',
       });
 
       expect(result.totalEnrollments).toBe(2);
