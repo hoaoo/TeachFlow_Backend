@@ -3,9 +3,11 @@ import {
   NotFoundException,
   ConflictException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
 import { CreateTeacherDto } from './dto/create-teacher.dto';
 import { UpdateTeacherDto } from './dto/update-teacher.dto';
 import { UpdateTeacherStatusDto } from './dto/update-teacher-status.dto';
@@ -31,7 +33,10 @@ export interface TeacherResponse {
 export class AdminTeachersService {
   private readonly logger = new Logger(AdminTeachersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly auditService?: AuditService,
+  ) {}
 
   /**
    * List teachers with search, status filter and database-level pagination
@@ -134,14 +139,26 @@ export class AdminTeachersService {
     });
 
     // Write audit log
-    await this.prisma.adminAuditLog.create({
-      data: {
+    if (this.auditService) {
+      await this.auditService.log({
         actorUserId: actorUser.userId,
-        action: 'CREATE_TEACHER',
+        actorEmail: actorUser.email,
+        action: 'TEACHER_CREATE',
         targetUserId: createdTeacher.userId,
+        resourceType: 'Teacher',
+        resourceId: createdTeacher.id,
         details: `Created teacher ${createdTeacher.fullName} (${createdTeacher.user.email})`,
-      },
-    });
+      });
+    } else {
+      await this.prisma.adminAuditLog.create({
+        data: {
+          actorUserId: actorUser.userId,
+          action: 'CREATE_TEACHER',
+          targetUserId: createdTeacher.userId,
+          details: `Created teacher ${createdTeacher.fullName} (${createdTeacher.user.email})`,
+        },
+      });
+    }
 
     this.logger.log(
       `[ADMIN_AUDIT] actor=${actorUser.email} action=CREATE_TEACHER targetUserId=${createdTeacher.userId} teacherName="${createdTeacher.fullName}"`,
@@ -202,14 +219,26 @@ export class AdminTeachersService {
     });
 
     // Write audit log
-    await this.prisma.adminAuditLog.create({
-      data: {
+    if (this.auditService) {
+      await this.auditService.log({
         actorUserId: actorUser.userId,
-        action: 'UPDATE_TEACHER',
+        actorEmail: actorUser.email,
+        action: 'TEACHER_UPDATE',
         targetUserId: updatedTeacher.userId,
+        resourceType: 'Teacher',
+        resourceId: id,
         details: `Updated teacher details for ID=${id}`,
-      },
-    });
+      });
+    } else {
+      await this.prisma.adminAuditLog.create({
+        data: {
+          actorUserId: actorUser.userId,
+          action: 'UPDATE_TEACHER',
+          targetUserId: updatedTeacher.userId,
+          details: `Updated teacher details for ID=${id}`,
+        },
+      });
+    }
 
     this.logger.log(
       `[ADMIN_AUDIT] actor=${actorUser.email} action=UPDATE_TEACHER targetUserId=${updatedTeacher.userId}`,
@@ -250,14 +279,26 @@ export class AdminTeachersService {
 
     const action = dto.isActive ? 'ENABLE_TEACHER' : 'DISABLE_TEACHER';
 
-    await this.prisma.adminAuditLog.create({
-      data: {
+    if (this.auditService) {
+      await this.auditService.log({
         actorUserId: actorUser.userId,
+        actorEmail: actorUser.email,
         action,
         targetUserId: teacher.userId,
+        resourceType: 'Teacher',
+        resourceId: id,
         details: `${dto.isActive ? 'Enabled' : 'Disabled'} teacher account ID=${id}`,
-      },
-    });
+      });
+    } else {
+      await this.prisma.adminAuditLog.create({
+        data: {
+          actorUserId: actorUser.userId,
+          action,
+          targetUserId: teacher.userId,
+          details: `${dto.isActive ? 'Enabled' : 'Disabled'} teacher account ID=${id}`,
+        },
+      });
+    }
 
     this.logger.log(
       `[ADMIN_AUDIT] actor=${actorUser.email} action=${action} targetUserId=${teacher.userId}`,
@@ -300,14 +341,26 @@ export class AdminTeachersService {
       },
     });
 
-    await this.prisma.adminAuditLog.create({
-      data: {
+    if (this.auditService) {
+      await this.auditService.log({
         actorUserId: actorUser.userId,
+        actorEmail: actorUser.email,
         action: 'RESET_TEACHER_PASSWORD',
         targetUserId: teacher.userId,
+        resourceType: 'Teacher',
+        resourceId: id,
         details: `Reset password for teacher ID=${id}`,
-      },
-    });
+      });
+    } else {
+      await this.prisma.adminAuditLog.create({
+        data: {
+          actorUserId: actorUser.userId,
+          action: 'RESET_TEACHER_PASSWORD',
+          targetUserId: teacher.userId,
+          details: `Reset password for teacher ID=${id}`,
+        },
+      });
+    }
 
     this.logger.log(
       `[ADMIN_AUDIT] actor=${actorUser.email} action=RESET_TEACHER_PASSWORD targetUserId=${teacher.userId}`,

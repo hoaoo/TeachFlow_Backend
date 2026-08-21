@@ -5,8 +5,10 @@ import {
   ConflictException,
   ForbiddenException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { TransferEnrollmentDto } from './dto/transfer-enrollment.dto';
 import { WithdrawEnrollmentDto } from './dto/withdraw-enrollment.dto';
@@ -16,7 +18,10 @@ import { EnrollmentStatus } from '@prisma/client';
 export class StudentEnrollmentsService {
   private readonly logger = new Logger(StudentEnrollmentsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private auditService?: AuditService,
+  ) {}
 
   async findAll(options?: {
     schoolYearId?: string;
@@ -219,6 +224,15 @@ export class StudentEnrollmentsService {
           `[STUDENT_ENROLLMENT_CREATED] studentId=${dto.studentId} classroomId=${dto.classroomId} schoolYearId=${dto.schoolYearId}`,
         );
 
+        this.auditService?.log({
+          actorUserId: currentTeacherId || 'SYSTEM',
+          action: 'STUDENT_ENROLL',
+          resourceType: 'StudentEnrollment',
+          resourceId: created.id,
+          targetUserId: dto.studentId,
+          details: { studentId: dto.studentId, classroomId: dto.classroomId, schoolYearId: dto.schoolYearId },
+        });
+
         return this.mapEnrollment(created);
       });
     } catch (err: any) {
@@ -355,6 +369,20 @@ export class StudentEnrollmentsService {
           `[STUDENT_TRANSFERRED] studentId=${source.studentId} sourceClass=${source.classroomId} targetClass=${targetClassroom.id} transferDate=${transferDate.toISOString()}`,
         );
 
+        this.auditService?.log({
+          actorUserId: currentTeacherId || 'SYSTEM',
+          action: 'STUDENT_TRANSFER',
+          resourceType: 'StudentEnrollment',
+          resourceId: targetEnrollment.id,
+          targetUserId: source.studentId,
+          details: {
+            studentId: source.studentId,
+            sourceClassroomId: source.classroomId,
+            targetClassroomId: targetClassroom.id,
+            reason: dto.reason,
+          },
+        });
+
         return this.mapEnrollment(targetEnrollment);
       });
     } catch (err: any) {
@@ -419,6 +447,15 @@ export class StudentEnrollmentsService {
       this.logger.log(
         `[STUDENT_WITHDRAWN] studentId=${source.studentId} classroomId=${source.classroomId} withdrawDate=${withdrawDate.toISOString()}`,
       );
+
+      this.auditService?.log({
+        actorUserId: currentTeacherId || 'SYSTEM',
+        action: 'STUDENT_WITHDRAW',
+        resourceType: 'StudentEnrollment',
+        resourceId: updated.id,
+        targetUserId: updated.studentId,
+        details: { studentId: updated.studentId, classroomId: updated.classroomId, reason: dto.reason },
+      });
 
       return this.mapEnrollment(updated);
     });

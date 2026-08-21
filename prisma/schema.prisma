@@ -93,6 +93,15 @@ enum BehaviorLevel {
   NEEDS_ATTENTION
 }
 
+enum NotificationType {
+  ASSIGNMENT
+  ENROLLMENT
+  TASK
+  ASSESSMENT
+  HOMEROOM
+  SYSTEM
+}
+
 model User {
   id               String    @id @default(uuid())
   email            String    @unique
@@ -104,6 +113,7 @@ model User {
   updatedAt        DateTime  @updatedAt
 
   teacher          Teacher?
+  notifications    Notification[]
 }
 
 model Teacher {
@@ -673,10 +683,37 @@ model TeacherTask {
 model AdminAuditLog {
   id           String   @id @default(uuid())
   actorUserId  String
+  actorEmail   String?
   action       String
-  targetUserId String
+  targetUserId String?
+  resourceType String?
+  resourceId   String?
+  status       String?  @default("SUCCESS")
+  ipAddress    String?
   details      String?  @db.Text
   createdAt    DateTime @default(now())
+
+  @@index([action])
+  @@index([actorUserId])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String           @db.Text
+  type      NotificationType @default(SYSTEM)
+  link      String?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
 }
 
 model StudentBehaviorRecord {

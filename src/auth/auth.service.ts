@@ -1,8 +1,9 @@
-import { Injectable, UnauthorizedException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, Logger, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
 import { LoginDto } from './dto/login.dto';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    @Optional() private auditService?: AuditService,
   ) {}
 
   async login(loginDto: LoginDto) {
@@ -24,22 +26,57 @@ export class AuthService {
 
     if (!user) {
       this.logger.warn(`Login failed for email: ${email} (User not found)`);
+      if (this.auditService) {
+        await this.auditService.log({
+          action: 'AUTH_LOGIN_FAILED',
+          actorEmail: email,
+          status: 'FAILURE',
+          details: { reason: 'User not found' },
+        });
+      }
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
 
     if (!user.isActive) {
       this.logger.warn(`Login failed for disabled account: ${email}`);
+      if (this.auditService) {
+        await this.auditService.log({
+          action: 'AUTH_LOGIN_FAILED',
+          actorUserId: user.id,
+          actorEmail: user.email,
+          status: 'FAILURE',
+          details: { reason: 'Account disabled' },
+        });
+      }
       throw new UnauthorizedException('Tài khoản đã bị vô hiệu hóa');
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       this.logger.warn(`Login failed for email: ${email} (Invalid password)`);
+      if (this.auditService) {
+        await this.auditService.log({
+          action: 'AUTH_LOGIN_FAILED',
+          actorUserId: user.id,
+          actorEmail: user.email,
+          status: 'FAILURE',
+          details: { reason: 'Invalid password' },
+        });
+      }
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role, user.teacher?.id);
     await this.updateRefreshTokenHash(user.id, tokens.refreshToken);
+
+    if (this.auditService) {
+      await this.auditService.log({
+        action: 'AUTH_LOGIN',
+        actorUserId: user.id,
+        actorEmail: user.email,
+        status: 'SUCCESS',
+      });
+    }
 
     return {
       user: {

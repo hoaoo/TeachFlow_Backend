@@ -5,8 +5,10 @@ import {
   ConflictException,
   ForbiddenException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
 import { CreateTeachingAssignmentDto } from './dto/create-teaching-assignment.dto';
 import { UpdateTeachingAssignmentDto } from './dto/update-teaching-assignment.dto';
 import { Role } from '@prisma/client';
@@ -15,7 +17,10 @@ import { Role } from '@prisma/client';
 export class TeachingAssignmentsService {
   private readonly logger = new Logger(TeachingAssignmentsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private auditService?: AuditService,
+  ) {}
 
   async findAll(options?: {
     schoolYearId?: string;
@@ -233,6 +238,15 @@ export class TeachingAssignmentsService {
         `[TEACHING_ASSIGNMENT_CREATED] id=${assignment.id} teacherId=${dto.teacherId} classroomId=${dto.classroomId} subjectId=${dto.subjectId} schoolYearId=${targetSchoolYearId}`,
       );
 
+      this.auditService?.log({
+        actorUserId: 'ADMIN',
+        action: 'TEACHING_ASSIGNMENT_CREATE',
+        resourceType: 'TeachingAssignment',
+        resourceId: assignment.id,
+        targetUserId: dto.teacherId,
+        details: { teacherId: dto.teacherId, classroomId: dto.classroomId, subjectId: dto.subjectId, schoolYearId: targetSchoolYearId },
+      });
+
       return this.mapAssignment(assignment);
     } catch (err: any) {
       if (
@@ -325,10 +339,10 @@ export class TeachingAssignmentsService {
       const updated = await this.prisma.teachingAssignment.update({
         where: { id },
         data: {
-          teacherId: dto.teacherId,
-          classroomId: dto.classroomId,
-          subjectId: dto.subjectId,
-          isActive: dto.isActive,
+          teacherId,
+          classroomId,
+          subjectId,
+          isActive: dto.isActive !== undefined ? dto.isActive : undefined,
         },
         include: {
           teacher: { select: { id: true, fullName: true, phone: true } },
@@ -339,6 +353,16 @@ export class TeachingAssignmentsService {
       });
 
       this.logger.log(`[TEACHING_ASSIGNMENT_UPDATED] id=${id} isActive=${updated.isActive}`);
+
+      this.auditService?.log({
+        actorUserId: 'ADMIN',
+        action: 'TEACHING_ASSIGNMENT_UPDATE',
+        resourceType: 'TeachingAssignment',
+        resourceId: id,
+        targetUserId: updated.teacherId,
+        details: { teacherId, classroomId, subjectId, isActive: updated.isActive },
+      });
+
       return this.mapAssignment(updated);
     } catch (err: any) {
       if (err.code === 'P2002') {
@@ -363,6 +387,15 @@ export class TeachingAssignmentsService {
     });
 
     this.logger.log(`[TEACHING_ASSIGNMENT_DEACTIVATED] id=${id}`);
+
+    this.auditService?.log({
+      actorUserId: 'ADMIN',
+      action: 'TEACHING_ASSIGNMENT_DEACTIVATE',
+      resourceType: 'TeachingAssignment',
+      resourceId: id,
+      targetUserId: deactivated.teacherId,
+    });
+
     return this.mapAssignment(deactivated);
   }
 
