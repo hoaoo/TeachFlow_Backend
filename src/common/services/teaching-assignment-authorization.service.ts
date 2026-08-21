@@ -213,7 +213,7 @@ export class TeachingAssignmentAuthorizationService {
     }
 
     const isHomeroom = classroom.teacherId === teacherId;
-    const hasAssignment = classroom.teachingAssignments.length > 0;
+    const hasAssignment = (classroom.teachingAssignments || []).length > 0;
 
     if (!isHomeroom && !hasAssignment) {
       this.logger.warn(
