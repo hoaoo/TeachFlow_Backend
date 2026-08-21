@@ -288,32 +288,12 @@ export class DashboardService {
       },
     ];
 
-    // 13. Admin stats if user is ADMIN
-    let adminStats: any = null;
-    if (user.role === 'ADMIN') {
-      const [totalTeachers, totalClassrooms, totalAllStudents, totalSubjects] = await Promise.all([
-        this.prisma.teacher.count(),
-        this.prisma.classroom.count({ where: { isActive: true, deletedAt: null } }),
-        this.prisma.studentEnrollment.count({ where: { status: 'ACTIVE' } }),
-        this.prisma.subject.count({ where: { isActive: true } }),
-      ]);
-
-      adminStats = {
-        totalTeachers,
-        totalClassrooms,
-        totalStudents: totalAllStudents,
-        totalSubjects,
-        currentSchoolYear: currentSchoolYear?.name || 'N/A',
-        currentSemester: currentSemester?.name || 'N/A',
-      };
-    }
-
     return {
       greeting: {
         date: capitalizedDate,
         title: `${timeGreeting}, ${displayName}`,
         description: currentSchoolYear
-          ? `Năm học ${currentSchoolYear.name}${currentSemester ? ` — ${currentSemester.name}` : ''}. Chúc thầy/cô một ngày giảng dạy hiệu quả!`
+          ? `Năm học ${currentSchoolYear.name}${currentSemester ? ` — ${currentSemester.name}` : ''}. Chúc thầy/cô một ngày làm việc hiệu quả!`
           : 'Chào mừng thầy/cô quay trở lại hệ thống trợ lý giáo viên TeachFlow.',
       },
       currentSchoolYear: currentSchoolYear
@@ -328,7 +308,6 @@ export class DashboardService {
       classProgress,
       featuredStudents,
       attendanceRate,
-      adminStats,
     };
   }
 }

@@ -160,7 +160,6 @@ describe('DashboardService', () => {
       expect(result.classProgress.overallPercent).toBe(50);
       expect(result.featuredStudents).toHaveLength(2);
       expect(result.attendanceRate).toBe(50);
-      expect(result.adminStats).toBeNull();
     });
 
     it('should resolve teacher profile by userId if teacherId is missing', async () => {
@@ -189,39 +188,6 @@ describe('DashboardService', () => {
       expect(result.lessons).toEqual([]);
       expect(result.tasks).toEqual([]);
       expect(result.featuredStudents).toEqual([]);
-    });
-  });
-
-  describe('getDashboardData for ADMIN', () => {
-    it('should include school-wide admin stats when user has ADMIN role', async () => {
-      mockPrismaService.schoolYear.findFirst.mockResolvedValue({
-        id: 'sy-1',
-        name: '2026-2027',
-        isCurrent: true,
-      });
-      mockPrismaService.semester.findFirst.mockResolvedValue(null);
-      mockPrismaService.classroom.findMany.mockResolvedValue([]);
-      mockPrismaService.lessonPlan.count.mockResolvedValue(0);
-      mockPrismaService.teacherTask.findMany.mockResolvedValue([]);
-      mockPrismaService.teachingPlan.findMany.mockResolvedValue([]);
-
-      mockPrismaService.teacher.count.mockResolvedValue(24);
-      mockPrismaService.classroom.count.mockResolvedValue(12);
-      mockPrismaService.studentEnrollment.count.mockResolvedValue(360);
-      mockPrismaService.subject.count.mockResolvedValue(8);
-
-      const result = await service.getDashboardData({
-        userId: 'admin-1',
-        email: 'admin@teachflow.vn',
-        role: 'ADMIN',
-      });
-
-      expect(result.adminStats).toBeDefined();
-      expect(result.adminStats.totalTeachers).toBe(24);
-      expect(result.adminStats.totalClassrooms).toBe(12);
-      expect(result.adminStats.totalStudents).toBe(360);
-      expect(result.adminStats.totalSubjects).toBe(8);
-      expect(result.adminStats.currentSchoolYear).toBe('2026-2027');
     });
   });
 });
