@@ -246,25 +246,6 @@ export class ClassroomsService {
         },
       });
 
-      // Auto-assign first active subject if teacher created the classroom
-      const defaultSubject = await this.prisma.subject?.findFirst({
-        where: { isActive: true },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (defaultSubject && targetTeacherId && this.prisma.teachingAssignment) {
-        await this.prisma.teachingAssignment
-          .create({
-            data: {
-              teacherId: targetTeacherId,
-              classroomId: classroom.id,
-              subjectId: defaultSubject.id,
-              schoolYearId: classroom.schoolYearId,
-              isActive: true,
-            },
-          })
-          .catch(() => null);
-      }
-
       return this.mapClassroom(classroom);
     } catch (err: any) {
       if (err.code === 'P2002') {

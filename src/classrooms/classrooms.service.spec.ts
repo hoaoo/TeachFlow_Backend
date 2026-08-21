@@ -65,6 +65,9 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
     studentComment: {
       create: jest.fn(),
     },
+    teachingAssignment: {
+      create: jest.fn(),
+    },
   };
 
   beforeEach(async () => {
@@ -112,6 +115,27 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
         }),
         include: expect.any(Object),
       });
+    });
+
+    it('should NOT auto-create teachingAssignment or auto-assign subject when creating classroom', async () => {
+      mockPrisma.schoolYear.findUnique.mockResolvedValueOnce(mockSchoolYearCurrent);
+      mockPrisma.grade.findUnique.mockResolvedValueOnce(mockGrade4);
+      mockPrisma.teacher.findUnique.mockResolvedValueOnce(mockTeacherA);
+      mockPrisma.classroom.findFirst.mockResolvedValueOnce(null);
+      mockPrisma.classroom.create.mockResolvedValueOnce(mockClassroomA);
+      mockPrisma.teachingAssignment.create.mockClear();
+
+      await service.create(
+        {
+          schoolYearId: 'sy-2026',
+          gradeId: 'grade-4',
+          code: '4A',
+          name: 'Lớp 4A',
+        },
+        'teacher-a',
+      );
+
+      expect(mockPrisma.teachingAssignment.create).not.toHaveBeenCalled();
     });
 
     it('should throw ConflictException if classroom code already exists in the same school year', async () => {

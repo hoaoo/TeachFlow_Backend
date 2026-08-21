@@ -115,27 +115,35 @@ export class TeachingPlansService {
       }
     }
 
-    // Check for time overlap on same date+classroom
+    // Check for time overlap on same date (for teacher OR classroom)
     if (dto.plannedDate && dto.startTime && dto.endTime) {
       const dayStart = new Date(dto.plannedDate + 'T00:00:00');
       const dayEnd = new Date(dto.plannedDate + 'T23:59:59');
 
-      const overlapping = await this.prisma.teachingPlan.findFirst({
+      const existingPlans = await this.prisma.teachingPlan.findMany({
         where: {
-          teacherId,
-          classroomId: dto.classroomId,
+          OR: [
+            { teacherId },
+            { classroomId: dto.classroomId },
+          ],
           plannedDate: { gte: dayStart, lte: dayEnd },
           startTime: { not: null },
           endTime: { not: null },
         },
       });
 
-      if (overlapping && overlapping.startTime && overlapping.endTime) {
-        // Check actual overlap: A starts before B ends AND A ends after B starts
-        if (dto.startTime < overlapping.endTime && dto.endTime > overlapping.startTime) {
-          throw new ConflictException(
-            `Lớp ${classroom.name} đã có lịch dạy từ ${overlapping.startTime} đến ${overlapping.endTime} vào ngày này. Vui lòng chọn giờ khác.`,
-          );
+      for (const existing of existingPlans) {
+        if (existing.startTime && existing.endTime) {
+          // Check actual overlap: startA < endB AND endA > startB
+          if (dto.startTime < existing.endTime && dto.endTime > existing.startTime) {
+            const isTeacherConflict = existing.teacherId === teacherId;
+            const conflictTitle = existing.title || 'tiết dạy khác';
+            throw new ConflictException(
+              isTeacherConflict
+                ? `Bạn đã có lịch dạy "${conflictTitle}" từ ${existing.startTime} đến ${existing.endTime} vào ngày này. Vui lòng chọn giờ khác.`
+                : `Lớp ${classroom.name} đã có lịch học từ ${existing.startTime} đến ${existing.endTime} vào ngày này.`,
+            );
+          }
         }
       }
     }
@@ -172,16 +180,58 @@ export class TeachingPlansService {
   }
 
   async update(id: string, dto: UpdateTeachingPlanDto, teacherId: string) {
-    await this.findOne(id, teacherId);
+    const existingPlan = await this.prisma.teachingPlan.findUnique({
+      where: { id },
+    });
 
-    // Validate time range if both provided
-    const startTime = dto.startTime;
-    const endTime = dto.endTime;
+    if (!existingPlan) {
+      throw new NotFoundException(`Không tìm thấy lịch dạy ${id}`);
+    }
+
+    if (existingPlan.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền chỉnh sửa lịch dạy này');
+    }
+
+    // Validate time range if provided or partially updated
+    const startTime = dto.startTime !== undefined ? dto.startTime : existingPlan.startTime;
+    const endTime = dto.endTime !== undefined ? dto.endTime : existingPlan.endTime;
     if (startTime && endTime && startTime >= endTime) {
       throw new BadRequestException('Giờ bắt đầu phải nhỏ hơn giờ kết thúc');
     }
 
-    const plannedDate = dto.plannedDate ? new Date(dto.plannedDate) : undefined;
+    const targetDate = dto.plannedDate
+      ? new Date(dto.plannedDate)
+      : existingPlan.plannedDate;
+
+    // Check overlap if date & time are set
+    if (targetDate && startTime && endTime) {
+      const dateIso = targetDate.toISOString().split('T')[0];
+      const dayStart = new Date(dateIso + 'T00:00:00');
+      const dayEnd = new Date(dateIso + 'T23:59:59');
+
+      const overlapping = await this.prisma.teachingPlan.findMany({
+        where: {
+          id: { not: id },
+          OR: [
+            { teacherId },
+            { classroomId: existingPlan.classroomId },
+          ],
+          plannedDate: { gte: dayStart, lte: dayEnd },
+          startTime: { not: null },
+          endTime: { not: null },
+        },
+      });
+
+      for (const s of overlapping) {
+        if (s.startTime && s.endTime) {
+          if (startTime < s.endTime && endTime > s.startTime) {
+            throw new ConflictException(
+              `Đã có lịch dạy "${s.title || 'tiết dạy'}" từ ${s.startTime} đến ${s.endTime} vào ngày này (trùng thời gian).`,
+            );
+          }
+        }
+      }
+    }
 
     const updated = await this.prisma.teachingPlan.update({
       where: { id },
@@ -193,11 +243,10 @@ export class TeachingPlansService {
         tone: dto.tone,
         room: dto.room?.trim(),
         weekNumber: dto.weekNumber,
-        plannedDate,
+        plannedDate: dto.plannedDate ? new Date(dto.plannedDate) : undefined,
         startTime: dto.startTime,
         endTime: dto.endTime,
         notes: dto.notes?.trim(),
-        // classroomId and subjectId are NOT updatable to protect history
       },
       include: {
         classroom: { include: { grade: true } },
