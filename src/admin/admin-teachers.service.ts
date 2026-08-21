@@ -89,7 +89,7 @@ export class AdminTeachersService {
       include: { user: true },
     });
 
-    if (!teacher) {
+    if (!teacher || teacher.user?.role !== 'TEACHER') {
       throw new NotFoundException('Không tìm thấy thông tin giáo viên');
     }
 
@@ -180,7 +180,7 @@ export class AdminTeachersService {
       include: { user: true },
     });
 
-    if (!teacher) {
+    if (!teacher || teacher.user?.role !== 'TEACHER') {
       throw new NotFoundException('Không tìm thấy thông tin giáo viên');
     }
 
@@ -260,7 +260,7 @@ export class AdminTeachersService {
       include: { user: true },
     });
 
-    if (!teacher) {
+    if (!teacher || teacher.user?.role !== 'TEACHER') {
       throw new NotFoundException('Không tìm thấy thông tin giáo viên');
     }
 
@@ -326,7 +326,7 @@ export class AdminTeachersService {
       include: { user: true },
     });
 
-    if (!teacher) {
+    if (!teacher || teacher.user?.role !== 'TEACHER') {
       throw new NotFoundException('Không tìm thấy thông tin giáo viên');
     }
 
@@ -369,6 +369,41 @@ export class AdminTeachersService {
     return {
       success: true,
       message: 'Mật khẩu đã được cập nhật. Giáo viên cần đăng nhập lại.',
+    };
+  }
+
+  /**
+   * Get system administration overview and stats
+   */
+  async getSystemStats() {
+    const [totalTeachers, activeTeachers, lockedTeachers, totalAuditLogs, recentAuditLogs] =
+      await Promise.all([
+        this.prisma.user.count({ where: { role: 'TEACHER' } }),
+        this.prisma.user.count({ where: { role: 'TEACHER', isActive: true } }),
+        this.prisma.user.count({ where: { role: 'TEACHER', isActive: false } }),
+        this.prisma.adminAuditLog.count(),
+        this.prisma.adminAuditLog.findMany({
+          take: 5,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            createdAt: true,
+            actorEmail: true,
+            action: true,
+            resourceType: true,
+            resourceId: true,
+            details: true,
+          },
+        }),
+      ]);
+
+    return {
+      totalTeachers,
+      activeTeachers,
+      lockedTeachers,
+      totalAuditLogs,
+      recentAuditLogs,
+      timestamp: new Date().toISOString(),
     };
   }
 

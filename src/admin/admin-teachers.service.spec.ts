@@ -118,12 +118,24 @@ describe('AdminTeachersService', () => {
       mockPrisma.teacher.findUnique.mockResolvedValue({
         id: 'admin-teacher-id',
         userId: 'admin-user-id', // matches actorUser.userId
-        user: { id: 'admin-user-id', isActive: true },
+        user: { id: 'admin-user-id', role: 'TEACHER', isActive: true },
       });
 
       await expect(
         service.updateTeacherStatus('admin-teacher-id', { isActive: false }, mockAdminUser),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject mutating account if target role is not TEACHER', async () => {
+      mockPrisma.teacher.findUnique.mockResolvedValue({
+        id: 'admin-other-id',
+        userId: 'admin-other-user',
+        user: { id: 'admin-other-user', role: 'ADMIN', isActive: true },
+      });
+
+      await expect(
+        service.updateTeacherStatus('admin-other-id', { isActive: false }, mockAdminUser),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('should update teacher status and record audit log', async () => {
