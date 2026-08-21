@@ -12,6 +12,6 @@ export class DashboardController {
   @Get()
   @ApiOperation({ summary: 'Lấy dữ liệu tổng quan trang chủ Dashboard' })
   async getDashboard(@CurrentUser() user: AuthenticatedUser) {
-    return this.dashboardService.getDashboardData(user.teacherId);
+    return this.dashboardService.getDashboardData(user);
   }
 }
