@@ -66,7 +66,17 @@ export class AuthService {
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role, user.teacher?.id);
+    let teacher = user.teacher;
+    if (user.role === 'TEACHER' && !teacher) {
+      teacher = await this.prisma.teacher.create({
+        data: {
+          userId: user.id,
+          fullName: user.email.split('@')[0],
+        },
+      });
+    }
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role, teacher?.id);
     await this.updateRefreshTokenHash(user.id, tokens.refreshToken);
 
     if (this.auditService) {
@@ -83,12 +93,12 @@ export class AuthService {
         id: user.id,
         email: user.email,
         role: user.role,
-        teacher: user.teacher
+        teacher: teacher
           ? {
-              id: user.teacher.id,
-              fullName: user.teacher.fullName,
-              avatarUrl: user.teacher.avatarUrl,
-              phone: user.teacher.phone,
+              id: teacher.id,
+              fullName: teacher.fullName,
+              avatarUrl: teacher.avatarUrl,
+              phone: teacher.phone,
             }
           : null,
       },
@@ -131,7 +141,7 @@ export class AuthService {
     return { success: true, message: 'Đăng xuất thành công' };
   }
 
-  async getMe(userId: string) {
+  async getMe(userId: string): Promise<any> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
@@ -153,26 +163,74 @@ export class AuthService {
       throw new UnauthorizedException('Không tìm thấy người dùng');
     }
 
+    if (user.role === 'TEACHER' && !user.teacher) {
+      await this.prisma.teacher.create({
+        data: {
+          userId: user.id,
+          fullName: user.email.split('@')[0],
+        },
+      });
+      return this.getMe(userId);
+    }
+
+    const teacher = user.teacher;
+
     return {
       id: user.id,
       email: user.email,
       role: user.role,
       isActive: user.isActive,
-      teacher: user.teacher
+      teacher: teacher
         ? {
-            id: user.teacher.id,
-            fullName: user.teacher.fullName,
-            avatarUrl: user.teacher.avatarUrl,
-            phone: user.teacher.phone,
-            classes: user.teacher.classrooms.map((cls) => ({
+            id: teacher.id,
+            fullName: teacher.fullName,
+            avatarUrl: teacher.avatarUrl,
+            phone: teacher.phone,
+            classes: (teacher.classrooms || []).map((cls: any) => ({
               id: cls.id,
               name: cls.name,
-              grade: cls.grade.name,
-              studentCount: cls._count.classStudents,
+              grade: cls.grade?.name || 'Khối',
+              studentCount: cls._count?.classStudents || 0,
             })),
           }
         : null,
     };
+  }
+
+  async updateProfile(userId: string, dto: { fullName?: string; phone?: string; avatarUrl?: string }) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { teacher: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Không tìm thấy người dùng');
+    }
+
+    if (user.role === 'TEACHER') {
+      const teacher = user.teacher;
+      if (!teacher) {
+        await this.prisma.teacher.create({
+          data: {
+            userId: user.id,
+            fullName: dto.fullName || user.email.split('@')[0],
+            phone: dto.phone,
+            avatarUrl: dto.avatarUrl,
+          },
+        });
+      } else {
+        await this.prisma.teacher.update({
+          where: { id: teacher.id },
+          data: {
+            fullName: dto.fullName || undefined,
+            phone: dto.phone || undefined,
+            avatarUrl: dto.avatarUrl || undefined,
+          },
+        });
+      }
+    }
+
+    return this.getMe(userId);
   }
 
   private async generateTokens(userId: string, email: string, role: string, teacherId?: string) {
