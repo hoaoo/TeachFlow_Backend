@@ -89,6 +89,41 @@ export class TeachingAssignmentAuthorizationService {
     });
 
     if (matches.length === 0) {
+      // Auto-declare teaching assignment if teacher owns the classroom
+      const classroom = await this.prisma.classroom.findUnique({
+        where: { id: params.classroomId },
+      });
+
+      if (classroom && !classroom.deletedAt && (classroom.teacherId === params.teacherId || isAdmin)) {
+        let subjectId = params.subjectId;
+        if (!subjectId) {
+          const defaultSubject = await this.prisma.subject.findFirst({
+            where: { isActive: true },
+            orderBy: { createdAt: 'asc' },
+          });
+          subjectId = defaultSubject?.id;
+        }
+
+        if (subjectId) {
+          const created = await this.prisma.teachingAssignment.create({
+            data: {
+              teacherId: params.teacherId,
+              classroomId: params.classroomId,
+              subjectId,
+              schoolYearId: params.schoolYearId || classroom.schoolYearId,
+              isActive: true,
+            },
+            include: {
+              teacher: true,
+              classroom: { include: { grade: true } },
+              subject: true,
+              schoolYear: true,
+            },
+          });
+          return created;
+        }
+      }
+
       throw new ForbiddenException('Không tìm thấy phân công giảng dạy đang hoạt động phù hợp với yêu cầu này');
     }
 

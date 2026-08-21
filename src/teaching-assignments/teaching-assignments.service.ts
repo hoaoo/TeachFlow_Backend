@@ -269,20 +269,17 @@ export class TeachingAssignmentsService {
     }
   }
 
-  async update(id: string, dto: UpdateTeachingAssignmentDto) {
-    const existing = await this.prisma.teachingAssignment.findUnique({
-      where: { id },
-      include: { classroom: true, subject: true, schoolYear: true, teacher: true },
-    });
+  async update(
+    id: string,
+    dto: UpdateTeachingAssignmentDto,
+    currentTeacherId?: string,
+  ) {
+    const existing = await this.findOne(id, currentTeacherId);
 
-    if (!existing) {
-      throw new NotFoundException(`Không tìm thấy phân công giảng dạy với mã ${id}`);
-    }
-
-    const teacherId = dto.teacherId || existing.teacherId;
-    const classroomId = dto.classroomId || existing.classroomId;
-    const subjectId = dto.subjectId || existing.subjectId;
-    const schoolYearId = existing.schoolYearId;
+    const teacherId = dto.teacherId || existing.teacher.id;
+    const classroomId = dto.classroomId || existing.classroom.id;
+    const subjectId = dto.subjectId || existing.subject.id;
+    const schoolYearId = existing.schoolYear.id;
 
     const isIdentityMutating =
       (dto.teacherId && dto.teacherId !== existing.teacherId) ||
@@ -382,8 +379,8 @@ export class TeachingAssignmentsService {
     }
   }
 
-  async deactivate(id: string) {
-    await this.findOne(id);
+  async deactivate(id: string, currentTeacherId?: string) {
+    await this.findOne(id, currentTeacherId);
 
     const deactivated = await this.prisma.teachingAssignment.update({
       where: { id },

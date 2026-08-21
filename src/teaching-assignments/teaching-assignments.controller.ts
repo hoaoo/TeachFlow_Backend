@@ -8,6 +8,7 @@ import {
   Body,
   Query,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { TeachingAssignmentsService } from './teaching-assignments.service';
@@ -75,26 +76,44 @@ export class TeachingAssignmentsController {
   }
 
   @Post()
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: 'Tạo phân công giảng dạy mới (Admin only)' })
-  async create(@Body() dto: CreateTeachingAssignmentDto) {
-    return this.assignmentsService.create(dto);
+  @ApiOperation({ summary: 'Khai báo / tạo phân công giảng dạy (Giáo viên tự khai báo lớp/môn)' })
+  async create(
+    @Body() dto: CreateTeachingAssignmentDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const effectiveTeacherId =
+      user.role === Role.ADMIN && dto.teacherId
+        ? dto.teacherId
+        : user.teacherId;
+
+    if (!effectiveTeacherId) {
+      throw new BadRequestException('Không tìm thấy thông tin giáo viên cho tài khoản này');
+    }
+
+    return this.assignmentsService.create({
+      ...dto,
+      teacherId: effectiveTeacherId,
+    });
   }
 
   @Patch(':id')
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: 'Cập nhật phân công giảng dạy (Admin only)' })
+  @ApiOperation({ summary: 'Cập nhật phân công giảng dạy (Giáo viên cập nhật phân công của mình)' })
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateTeachingAssignmentDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.assignmentsService.update(id, dto);
+    const teacherId = user.role === Role.ADMIN ? undefined : user.teacherId;
+    return this.assignmentsService.update(id, dto, teacherId);
   }
 
   @Delete(':id')
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: 'Vô hiệu hóa phân công giảng dạy (Admin only)' })
-  async deactivate(@Param('id') id: string) {
-    return this.assignmentsService.deactivate(id);
+  @ApiOperation({ summary: 'Hủy / Vô hiệu hóa phân công giảng dạy (Giáo viên hủy phân công của mình)' })
+  async deactivate(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const teacherId = user.role === Role.ADMIN ? undefined : user.teacherId;
+    return this.assignmentsService.deactivate(id, teacherId);
   }
 }

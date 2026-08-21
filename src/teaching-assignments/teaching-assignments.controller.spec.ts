@@ -100,27 +100,29 @@ describe('TeachingAssignmentsController & MeTeachingAssignmentsController', () =
     });
   });
 
-  describe('Admin mutations', () => {
-    it('5. Admin create calls service create', async () => {
+  describe('Teacher & Admin mutations', () => {
+    it('5. Teacher self-declare creates assignment with token teacherId', async () => {
       mockService.create.mockResolvedValueOnce(mockAssignment);
 
       const dto = {
-        teacherId: 'teacher-1',
         classroomId: 'class-4a',
         subjectId: 'sub-math',
         schoolYearId: 'sy-2026',
       };
-      const result = await controller.create(dto);
+      const result = await controller.create(dto as any, mockTeacherUser);
       expect(result).toEqual(mockAssignment);
-      expect(mockService.create).toHaveBeenCalledWith(dto);
+      expect(mockService.create).toHaveBeenCalledWith({
+        ...dto,
+        teacherId: 'teacher-1',
+      });
     });
 
-    it('6. Admin deactivate calls service deactivate', async () => {
+    it('6. Teacher deactivate calls service deactivate with teacherId', async () => {
       mockService.deactivate.mockResolvedValueOnce({ ...mockAssignment, isActive: false });
 
-      const result = await controller.deactivate('asg-1');
+      const result = await controller.deactivate('asg-1', mockTeacherUser);
       expect(result.isActive).toBe(false);
-      expect(mockService.deactivate).toHaveBeenCalledWith('asg-1');
+      expect(mockService.deactivate).toHaveBeenCalledWith('asg-1', 'teacher-1');
     });
   });
 });
