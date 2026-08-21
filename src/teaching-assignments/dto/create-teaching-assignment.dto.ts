@@ -1,18 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-export class CreateTeachingAssignmentDto {
-  @ApiProperty({ example: 'teacher-uuid', description: 'ID giáo viên' })
-  @IsString()
-  @IsNotEmpty({ message: 'ID giáo viên không được để trống' })
-  teacherId: string;
-
-  @ApiProperty({ example: 'classroom-uuid', description: 'ID lớp học' })
+/**
+ * DTO for teacher to self-declare their teaching context (lớp/môn đang dạy).
+ * teacherId is NOT included — it is always derived from the authenticated JWT token.
+ */
+export class CreateTeachingContextDto {
+  @ApiProperty({ example: 'classroom-uuid', description: 'ID lớp học giáo viên đang phụ trách' })
   @IsString()
   @IsNotEmpty({ message: 'ID lớp học không được để trống' })
   classroomId: string;
 
-  @ApiProperty({ example: 'subject-uuid', description: 'ID môn học' })
+  @ApiProperty({ example: 'subject-uuid', description: 'ID môn học giáo viên đang giảng dạy' })
   @IsString()
   @IsNotEmpty({ message: 'ID môn học không được để trống' })
   subjectId: string;
@@ -21,4 +20,10 @@ export class CreateTeachingAssignmentDto {
   @IsOptional()
   @IsString()
   schoolYearId?: string;
+}
+
+// Keep backward-compat alias used in service
+export class CreateTeachingAssignmentDto extends CreateTeachingContextDto {
+  // teacherId is injected by controller from JWT — never sent by client
+  teacherId!: string;
 }

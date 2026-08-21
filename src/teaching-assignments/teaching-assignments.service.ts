@@ -137,7 +137,7 @@ export class TeachingAssignmentsService {
   }
 
   async create(dto: CreateTeachingAssignmentDto) {
-    // 1. Validate Teacher
+    // 1. Validate Teacher (dto.teacherId was injected by controller from JWT)
     const teacher = await this.prisma.teacher.findUnique({
       where: { id: dto.teacherId },
       include: { user: true },
@@ -148,7 +148,7 @@ export class TeachingAssignmentsService {
     }
 
     if (teacher.user && teacher.user.role !== Role.TEACHER) {
-      throw new BadRequestException('Người dùng được phân công không có vai trò Giáo viên');
+      throw new BadRequestException('Tài khoản này không có vai trò Giáo viên');
     }
 
     if (teacher.user && !teacher.user.isActive) {
@@ -202,7 +202,7 @@ export class TeachingAssignmentsService {
       throw new BadRequestException(`Năm học "${schoolYear.name}" đang không ở trạng thái hoạt động`);
     }
 
-    // 6. Pre-check for duplicate active assignment
+    // 6. Pre-check for duplicate active teaching context
     const existing = await this.prisma.teachingAssignment.findFirst({
       where: {
         teacherId: dto.teacherId,
@@ -215,7 +215,7 @@ export class TeachingAssignmentsService {
 
     if (existing) {
       throw new ConflictException(
-        `Giáo viên "${teacher.fullName}" đã được phân công dạy môn "${subject.name}" tại lớp "${classroom.name}" trong năm học "${schoolYear.name}"`,
+        `Bạn đã khai báo dạy môn "${subject.name}" tại lớp "${classroom.name}" trong năm học "${schoolYear.name}"`,
       );
     }
 
@@ -237,23 +237,24 @@ export class TeachingAssignmentsService {
       });
 
       this.logger.log(
-        `[TEACHING_ASSIGNMENT_CREATED] id=${assignment.id} teacherId=${dto.teacherId} classroomId=${dto.classroomId} subjectId=${dto.subjectId} schoolYearId=${targetSchoolYearId}`,
+        `[TEACHING_CONTEXT_DECLARED] id=${assignment.id} teacherId=${dto.teacherId} classroomId=${dto.classroomId} subjectId=${dto.subjectId} schoolYearId=${targetSchoolYearId}`,
       );
 
+      // Audit with teacher as actor (self-declaration, not admin action)
       this.auditService?.log({
-        actorUserId: 'ADMIN',
-        action: 'TEACHING_ASSIGNMENT_CREATE',
+        actorUserId: teacher.user?.id ?? dto.teacherId,
+        action: 'TEACHING_CONTEXT_DECLARE',
         resourceType: 'TeachingAssignment',
         resourceId: assignment.id,
         targetUserId: dto.teacherId,
         details: { teacherId: dto.teacherId, classroomId: dto.classroomId, subjectId: dto.subjectId, schoolYearId: targetSchoolYearId },
       });
 
-      // Send in-app notification to teacher
+      // Send in-app notification to teacher confirming their own declaration
       this.notificationsService?.createNotification({
         teacherId: dto.teacherId,
-        title: 'Phân công giảng dạy mới',
-        message: `Bạn được phân công giảng dạy môn ${assignment.subject.name} tại lớp ${assignment.classroom.name} (${assignment.schoolYear.name}).`,
+        title: 'Khai báo ngữ cảnh giảng dạy thành công',
+        message: `Bạn đã khai báo môn ${assignment.subject.name} tại lớp ${assignment.classroom.name} (${assignment.schoolYear.name}).`,
         type: NotificationType.ASSIGNMENT,
       });
 
@@ -263,11 +264,12 @@ export class TeachingAssignmentsService {
         err.code === 'P2002' ||
         err.message?.includes('TeachingAssignment_teacher_classroom_subject_schoolYear_unique')
       ) {
-        throw new ConflictException('Phân công giảng dạy này đã tồn tại trong hệ thống');
+        throw new ConflictException('Ngữ cảnh giảng dạy này đã tồn tại trong hệ thống');
       }
       throw err;
     }
   }
+
 
   async update(
     id: string,
@@ -276,13 +278,14 @@ export class TeachingAssignmentsService {
   ) {
     const existing = await this.findOne(id, currentTeacherId);
 
-    const teacherId = dto.teacherId || existing.teacher.id;
+    // teacherId is immutable — always kept from existing record
+    const teacherId = existing.teacher.id;
     const classroomId = dto.classroomId || existing.classroom.id;
     const subjectId = dto.subjectId || existing.subject.id;
     const schoolYearId = existing.schoolYear.id;
 
+    // Check if classroom/subject is being changed (teacher-scoped identity mutation)
     const isIdentityMutating =
-      (dto.teacherId && dto.teacherId !== existing.teacherId) ||
       (dto.classroomId && dto.classroomId !== existing.classroomId) ||
       (dto.subjectId && dto.subjectId !== existing.subjectId);
 
@@ -296,22 +299,16 @@ export class TeachingAssignmentsService {
       const totalReferences = lessonPlanCount + attendanceCount + assessmentCount;
       if (totalReferences > 0) {
         throw new BadRequestException(
-          `Không thể thay đổi giáo viên, lớp học hoặc môn học của phân công đã được liên kết với ${totalReferences} tài nguyên (giáo án, điểm danh, đánh giá). Vui lòng vô hiệu hóa phân công này và tạo phân công mới.`,
+          `Không thể thay đổi lớp học hoặc môn học của ngữ cảnh giảng dạy đã được liên kết với ${totalReferences} tài nguyên (giáo án, điểm danh, đánh giá). Vui lòng hủy ngữ cảnh này và tạo mới.`,
         );
       }
-    }
-
-    if (dto.teacherId && dto.teacherId !== existing.teacherId) {
-      const t = await this.prisma.teacher.findUnique({ where: { id: dto.teacherId }, include: { user: true } });
-      if (!t) throw new NotFoundException(`Không tìm thấy giáo viên với mã ${dto.teacherId}`);
-      if (t.user && t.user.role !== Role.TEACHER) throw new BadRequestException('Người dùng không phải là Giáo viên');
     }
 
     if (dto.classroomId && dto.classroomId !== existing.classroomId) {
       const c = await this.prisma.classroom.findUnique({ where: { id: dto.classroomId } });
       if (!c || c.deletedAt) throw new NotFoundException(`Không tìm thấy lớp học với mã ${dto.classroomId}`);
       if (c.schoolYearId !== existing.schoolYearId) {
-        throw new BadRequestException('Không thể chuyển phân công sang lớp thuộc năm học khác');
+        throw new BadRequestException('Không thể chuyển ngữ cảnh giảng dạy sang lớp thuộc năm học khác');
       }
     }
 
@@ -321,7 +318,6 @@ export class TeachingAssignmentsService {
     }
 
     if (
-      (dto.teacherId && dto.teacherId !== existing.teacherId) ||
       (dto.classroomId && dto.classroomId !== existing.classroomId) ||
       (dto.subjectId && dto.subjectId !== existing.subjectId) ||
       (dto.isActive === true && existing.isActive === false)
@@ -338,7 +334,7 @@ export class TeachingAssignmentsService {
       });
 
       if (duplicate) {
-        throw new ConflictException('Phân công giảng dạy tương tự đã tồn tại và đang hoạt động');
+        throw new ConflictException('Ngữ cảnh giảng dạy tương tự đã tồn tại và đang hoạt động');
       }
     }
 
@@ -346,7 +342,7 @@ export class TeachingAssignmentsService {
       const updated = await this.prisma.teachingAssignment.update({
         where: { id },
         data: {
-          teacherId,
+          // teacherId is never updated — ownership is immutable
           classroomId,
           subjectId,
           isActive: dto.isActive !== undefined ? dto.isActive : undefined,
@@ -359,11 +355,12 @@ export class TeachingAssignmentsService {
         },
       });
 
-      this.logger.log(`[TEACHING_ASSIGNMENT_UPDATED] id=${id} isActive=${updated.isActive}`);
+      this.logger.log(`[TEACHING_CONTEXT_UPDATED] id=${id} teacherId=${teacherId} isActive=${updated.isActive}`);
 
+      // Audit with teacher as actor
       this.auditService?.log({
-        actorUserId: 'ADMIN',
-        action: 'TEACHING_ASSIGNMENT_UPDATE',
+        actorUserId: currentTeacherId ?? teacherId,
+        action: 'TEACHING_CONTEXT_UPDATE',
         resourceType: 'TeachingAssignment',
         resourceId: id,
         targetUserId: updated.teacherId,
@@ -373,7 +370,7 @@ export class TeachingAssignmentsService {
       return this.mapAssignment(updated);
     } catch (err: any) {
       if (err.code === 'P2002') {
-        throw new ConflictException('Phân công giảng dạy tương tự đã tồn tại trong hệ thống');
+        throw new ConflictException('Ngữ cảnh giảng dạy tương tự đã tồn tại trong hệ thống');
       }
       throw err;
     }
@@ -393,11 +390,12 @@ export class TeachingAssignmentsService {
       },
     });
 
-    this.logger.log(`[TEACHING_ASSIGNMENT_DEACTIVATED] id=${id}`);
+    this.logger.log(`[TEACHING_CONTEXT_DEACTIVATED] id=${id} teacherId=${deactivated.teacherId}`);
 
+    // Audit with teacher as actor (self-managed deactivation)
     this.auditService?.log({
-      actorUserId: 'ADMIN',
-      action: 'TEACHING_ASSIGNMENT_DEACTIVATE',
+      actorUserId: currentTeacherId ?? deactivated.teacherId,
+      action: 'TEACHING_CONTEXT_DEACTIVATE',
       resourceType: 'TeachingAssignment',
       resourceId: id,
       targetUserId: deactivated.teacherId,
