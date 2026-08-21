@@ -20,7 +20,11 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   const configService = app.get(ConfigService);
-  const port = env.PORT || configService.get<number>('PORT', 3001);
+  const port = Number(
+    process.env.PORT ??
+    configService.get<string>('PORT') ??
+    3001,
+  );
   const nodeEnv = env.NODE_ENV;
   const isProd = nodeEnv === 'production';
 
@@ -116,9 +120,9 @@ async function bootstrap() {
     },
   });
 
-  await app.listen(port);
-  logger.log(`TeachFlow Backend running in ${nodeEnv} mode on: http://localhost:${port}/api`);
-  logger.log(`Swagger OpenAPI Documentation: http://localhost:${port}/api/docs`);
-  logger.log(`Healthcheck endpoint: http://localhost:${port}/api/health`);
+  await app.listen(port, '0.0.0.0');
+  logger.log(`TeachFlow Backend running in ${nodeEnv} mode on port ${port}`);
+  logger.log('Swagger OpenAPI Documentation: /api/docs');
+  logger.log('Healthcheck endpoint: /api/health');
 }
 bootstrap();
