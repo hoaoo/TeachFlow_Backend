@@ -122,6 +122,12 @@ export class AttendanceService {
     const targetDate = new Date(dto.date);
     targetDate.setHours(0, 0, 0, 0);
 
+    const now = new Date();
+    const maxAllowedDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 23, 59, 59);
+    if (targetDate > maxAllowedDate) {
+      throw new BadRequestException('Không thể điểm danh cho ngày trong tương lai');
+    }
+
     // Validate that every submitted student has a valid enrollment at targetDate
     await this.assignmentAuth.assertStudentsEnrolled(
       dto.classId,
