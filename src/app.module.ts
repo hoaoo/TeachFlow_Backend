@@ -27,6 +27,7 @@ import { HomeroomModule } from './homeroom/homeroom.module';
 import { SemestersModule } from './semesters/semesters.module';
 import { StudentEnrollmentsModule } from './student-enrollments/student-enrollments.module';
 import { TeachingAssignmentsModule } from './teaching-assignments/teaching-assignments.module';
+import { ReportsModule } from './reports/reports.module';
 import { HealthModule } from './health/health.module';
 import { CommonModule } from './common/common.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -72,6 +73,7 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     HomeroomModule,
     StudentEnrollmentsModule,
     TeachingAssignmentsModule,
+    ReportsModule,
   ],
   providers: [
     {
