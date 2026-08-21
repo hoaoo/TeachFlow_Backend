@@ -5,7 +5,7 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install dependencies (including Prisma CLI for build and runtime)
 COPY package*.json ./
 COPY prisma ./prisma/
 
@@ -28,7 +28,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Copy production artifacts from builder
+# Copy production dependencies and artifacts
 COPY --from=builder --chown=node:node /app/package*.json ./
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/prisma ./prisma
@@ -44,4 +44,4 @@ EXPOSE 3001
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3001/api/health || exit 1
 
-CMD ["node", "dist/main.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start:prod"]
