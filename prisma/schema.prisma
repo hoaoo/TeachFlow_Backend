@@ -24,6 +24,13 @@ enum StudentStatus {
   NEEDS_SUPPORT
 }
 
+enum EnrollmentStatus {
+  ACTIVE
+  TRANSFERRED
+  COMPLETED
+  WITHDRAWN
+}
+
 enum LessonPlanStatus {
   DRAFT
   COMPLETED
@@ -122,28 +129,54 @@ model Teacher {
   studentBehaviorRecords StudentBehaviorRecord[]
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
+  teachingAssignments    TeachingAssignment[]
 }
 
 model SchoolYear {
   id        String   @id @default(uuid())
-  name      String
+  name      String   @unique
   startDate DateTime
   endDate   DateTime
   isCurrent Boolean  @default(false)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  semesters           Semester[]
   classrooms          Classroom[]
   teachingPlans       TeachingPlan[]
   assessments         Assessment[]
   weeklyClassReviews  WeeklyClassReview[]
   monthlyClassReviews MonthlyClassReview[]
+  studentEnrollments  StudentEnrollment[]
+  teachingAssignments TeachingAssignment[]
+}
+
+model Semester {
+  id           String     @id @default(uuid())
+  schoolYearId String
+  code         String
+  name         String
+  startDate    DateTime
+  endDate      DateTime
+  sortOrder    Int        @default(1)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  schoolYear   SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+
+  @@unique([schoolYearId, code])
+  @@index([schoolYearId])
 }
 
 model Grade {
   id        String   @id @default(uuid())
+  code      String?  @unique
   name      String
   level     Int
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -159,21 +192,25 @@ model Subject {
   code      String   @unique
   name      String
   status    String   @default("ACTIVE")
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lessons            Lesson[]
-  teachingPlans      TeachingPlan[]
-  lessonPlans        LessonPlan[]
-  teachingActivities TeachingActivity[]
-  worksheets         Worksheet[]
-  assessments        Assessment[]
-  studentComments    StudentComment[]
-  teachingResources  TeachingResource[]
+  lessons             Lesson[]
+  teachingPlans       TeachingPlan[]
+  lessonPlans         LessonPlan[]
+  teachingActivities  TeachingActivity[]
+  worksheets          Worksheet[]
+  assessments         Assessment[]
+  studentComments     StudentComment[]
+  teachingResources   TeachingResource[]
+  teachingAssignments TeachingAssignment[]
 }
 
 model Classroom {
   id           String    @id @default(uuid())
+  code         String
   name         String
   gradeId      String
   schoolYearId String
@@ -182,6 +219,7 @@ model Classroom {
   schedule     String?
   accent       String?   @default("teal")
   status       String    @default("ACTIVE")
+  isActive     Boolean   @default(true)
   deletedAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -190,6 +228,7 @@ model Classroom {
   schoolYear             SchoolYear              @relation(fields: [schoolYearId], references: [id])
   teacher                Teacher                 @relation(fields: [teacherId], references: [id])
   classStudents          ClassStudent[]
+  studentEnrollments     StudentEnrollment[]
   teachingPlans          TeachingPlan[]
   lessonPlans            LessonPlan[]
   attendanceSessions     AttendanceSession[]
@@ -199,6 +238,36 @@ model Classroom {
   studentBehaviorRecords StudentBehaviorRecord[]
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
+  teachingAssignments    TeachingAssignment[]
+
+  @@unique([schoolYearId, code])
+  @@index([schoolYearId])
+  @@index([gradeId])
+  @@index([teacherId])
+}
+
+model TeachingAssignment {
+  id           String     @id @default(uuid())
+  teacherId    String
+  classroomId  String
+  subjectId    String
+  schoolYearId String
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  teacher      Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  classroom    Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  subject      Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  schoolYear   SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+
+  lessonPlans        LessonPlan[]
+  attendanceSessions AttendanceSession[]
+  assessments        Assessment[]
+
+  @@index([teacherId, schoolYearId, isActive])
+  @@index([classroomId, schoolYearId, isActive])
+  @@index([subjectId])
 }
 
 model Student {
@@ -218,10 +287,34 @@ model Student {
   updatedAt   DateTime      @updatedAt
 
   classStudents      ClassStudent[]
+  studentEnrollments StudentEnrollment[]
   studentAttendances StudentAttendance[]
   studentAssessments StudentAssessment[]
   comments           StudentComment[]
   behaviorRecords    StudentBehaviorRecord[]
+}
+
+model StudentEnrollment {
+  id             String           @id @default(uuid())
+  studentId      String
+  schoolYearId   String
+  classroomId    String
+  status         EnrollmentStatus @default(ACTIVE)
+  enrolledAt     DateTime         @default(now())
+  leftAt         DateTime?
+  transferReason String?
+  note           String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  student        Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  schoolYear     SchoolYear       @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+  classroom      Classroom        @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([classroomId, status])
+  @@index([schoolYearId, classroomId, status])
+  @@index([studentId, schoolYearId])
 }
 
 model ClassStudent {
@@ -289,6 +382,7 @@ model LessonPlan {
   teacherId            String
   classroomId          String?
   subjectId            String?
+  teachingAssignmentId String?
   lessonId             String?
   title                String
   subjectName          String?
@@ -306,12 +400,15 @@ model LessonPlan {
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
-  teacher    Teacher              @relation(fields: [teacherId], references: [id])
-  classroom  Classroom?           @relation(fields: [classroomId], references: [id])
-  subject    Subject?             @relation(fields: [subjectId], references: [id])
-  lesson     Lesson?              @relation(fields: [lessonId], references: [id])
-  activities LessonPlanActivity[]
-  resources  LessonPlanResource[]
+  teacher            Teacher              @relation(fields: [teacherId], references: [id])
+  classroom          Classroom?           @relation(fields: [classroomId], references: [id])
+  subject            Subject?             @relation(fields: [subjectId], references: [id])
+  teachingAssignment TeachingAssignment?  @relation(fields: [teachingAssignmentId], references: [id], onDelete: SetNull)
+  lesson             Lesson?              @relation(fields: [lessonId], references: [id])
+  activities         LessonPlanActivity[]
+  resources          LessonPlanResource[]
+
+  @@index([teachingAssignmentId])
 }
 
 model LessonPlanActivity {
@@ -400,23 +497,26 @@ model WorksheetQuestion {
 }
 
 model AttendanceSession {
-  id             String    @id @default(uuid())
-  classroomId    String
-  teacherId      String
-  attendanceDate DateTime  @db.Date
-  sessionPeriod  String?   @default("MORNING")
-  title          String?
-  status         String?   @default("COMPLETED")
-  meta           String?
-  tone           String?   @default("teal")
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                   String    @id @default(uuid())
+  classroomId          String
+  teacherId            String
+  teachingAssignmentId String?
+  attendanceDate       DateTime  @db.Date
+  sessionPeriod        String?   @default("MORNING")
+  title                String?
+  status               String?   @default("COMPLETED")
+  meta                 String?
+  tone                 String?   @default("teal")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  classroom   Classroom           @relation(fields: [classroomId], references: [id], onDelete: Cascade)
-  teacher     Teacher             @relation(fields: [teacherId], references: [id])
-  attendances StudentAttendance[]
+  classroom          Classroom           @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  teacher            Teacher             @relation(fields: [teacherId], references: [id])
+  teachingAssignment TeachingAssignment? @relation(fields: [teachingAssignmentId], references: [id], onDelete: SetNull)
+  attendances        StudentAttendance[]
 
   @@unique([classroomId, attendanceDate])
+  @@index([teachingAssignmentId])
 }
 
 model StudentAttendance {
@@ -435,30 +535,34 @@ model StudentAttendance {
 }
 
 model Assessment {
-  id             String    @id @default(uuid())
-  teacherId      String
-  classroomId    String
-  subjectId      String?
-  schoolYearId   String?
-  weekNumber     Int?
-  semester       Int?      @default(1)
-  assessmentDate DateTime  @default(now())
-  title          String
-  subtitle       String?
-  status         String    @default("IN_PROGRESS")
-  meta           String?
-  tone           String?   @default("teal")
-  version        Int       @default(1)
-  deletedAt      DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                   String    @id @default(uuid())
+  teacherId            String
+  classroomId          String
+  subjectId            String?
+  schoolYearId         String?
+  teachingAssignmentId String?
+  weekNumber           Int?
+  semester             Int?      @default(1)
+  assessmentDate       DateTime  @default(now())
+  title                String
+  subtitle             String?
+  status               String    @default("IN_PROGRESS")
+  meta                 String?
+  tone                 String?   @default("teal")
+  version              Int       @default(1)
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   teacher            Teacher               @relation(fields: [teacherId], references: [id])
   classroom          Classroom             @relation(fields: [classroomId], references: [id])
   subject            Subject?              @relation(fields: [subjectId], references: [id])
   schoolYear         SchoolYear?           @relation(fields: [schoolYearId], references: [id])
+  teachingAssignment TeachingAssignment?   @relation(fields: [teachingAssignmentId], references: [id], onDelete: SetNull)
   criteria           AssessmentCriterion[]
   studentAssessments StudentAssessment[]
+
+  @@index([teachingAssignmentId])
 }
 
 model AssessmentCriterion {

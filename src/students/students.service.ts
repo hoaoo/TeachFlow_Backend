@@ -112,11 +112,12 @@ export class StudentsService {
   }
 
   async create(dto: CreateStudentDto, teacherId: string) {
+    let classroom: any = null;
     if (dto.classId) {
-      const classroom = await this.prisma.classroom.findUnique({
+      classroom = await this.prisma.classroom.findUnique({
         where: { id: dto.classId },
       });
-      if (!classroom || classroom.deletedAt || classroom.teacherId !== teacherId) {
+      if (!classroom || classroom.deletedAt || (teacherId && classroom.teacherId !== teacherId)) {
         throw new ForbiddenException('Bạn không có quyền thêm học sinh vào lớp học này');
       }
     }
@@ -145,7 +146,18 @@ export class StudentsService {
         },
       });
 
-      if (dto.classId) {
+      if (dto.classId && classroom) {
+        await tx.studentEnrollment.create({
+          data: {
+            studentId: student.id,
+            schoolYearId: classroom.schoolYearId,
+            classroomId: dto.classId,
+            status: 'ACTIVE',
+            enrolledAt: new Date(),
+            note: dto.note,
+          },
+        });
+
         await tx.classStudent.create({
           data: {
             classroomId: dto.classId,
@@ -303,6 +315,35 @@ export class StudentsService {
       content: c.content,
       date: new Date(c.commentDate).toLocaleDateString('vi-VN'),
       teacherName: c.teacher?.fullName || 'Giáo viên',
+    }));
+  }
+
+  async getEnrollments(id: string, teacherId?: string) {
+    await this.findOne(id, teacherId);
+
+    const enrollments = await this.prisma.studentEnrollment.findMany({
+      where: { studentId: id },
+      include: {
+        schoolYear: true,
+        classroom: { include: { grade: true } },
+      },
+      orderBy: [
+        { schoolYear: { startDate: 'desc' } },
+        { enrolledAt: 'desc' },
+      ],
+    });
+
+    return enrollments.map((e) => ({
+      id: e.id,
+      schoolYearId: e.schoolYearId,
+      schoolYear: e.schoolYear ? { id: e.schoolYear.id, name: e.schoolYear.name, isCurrent: e.schoolYear.isCurrent } : undefined,
+      classroomId: e.classroomId,
+      classroom: e.classroom ? { id: e.classroom.id, code: e.classroom.code, name: e.classroom.name, gradeName: e.classroom.grade?.name } : undefined,
+      status: e.status,
+      enrolledAt: e.enrolledAt,
+      leftAt: e.leftAt,
+      transferReason: e.transferReason,
+      note: e.note,
     }));
   }
 

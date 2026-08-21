@@ -42,43 +42,66 @@ async function main() {
       );
     }
 
-    // Ensure fundamental base data (School Year, Grades, Subjects) without mock classrooms/teachers/students
-    let schoolYear = await prisma.schoolYear.findFirst({
+    // Ensure fundamental base data (School Year, Semesters, Grades, Subjects) without mock classrooms/teachers/students
+    const sy2627 = await prisma.schoolYear.upsert({
       where: { name: '2026 - 2027' },
+      update: { isCurrent: true, isActive: true },
+      create: {
+        name: '2026 - 2027',
+        startDate: new Date('2026-09-01'),
+        endDate: new Date('2027-05-31'),
+        isCurrent: true,
+        isActive: true,
+      },
     });
-    if (!schoolYear) {
-      schoolYear = await prisma.schoolYear.create({
-        data: {
-          name: '2026 - 2027',
-          startDate: new Date('2026-09-01'),
-          endDate: new Date('2027-05-31'),
-          isCurrent: true,
-        },
-      });
-    }
+
+    await prisma.semester.upsert({
+      where: { schoolYearId_code: { schoolYearId: sy2627.id, code: 'HK1' } },
+      update: { name: 'Học kỳ I', startDate: new Date('2026-09-01'), endDate: new Date('2027-01-15'), sortOrder: 1 },
+      create: { schoolYearId: sy2627.id, code: 'HK1', name: 'Học kỳ I', startDate: new Date('2026-09-01'), endDate: new Date('2027-01-15'), sortOrder: 1, isActive: true },
+    });
+
+    await prisma.semester.upsert({
+      where: { schoolYearId_code: { schoolYearId: sy2627.id, code: 'HK2' } },
+      update: { name: 'Học kỳ II', startDate: new Date('2027-01-16'), endDate: new Date('2027-05-31'), sortOrder: 2 },
+      create: { schoolYearId: sy2627.id, code: 'HK2', name: 'Học kỳ II', startDate: new Date('2027-01-16'), endDate: new Date('2027-05-31'), sortOrder: 2, isActive: true },
+    });
 
     for (const level of [1, 2, 3, 4, 5]) {
+      const code = `K${level.toString().padStart(2, '0')}`;
       const existing = await prisma.grade.findFirst({ where: { level } });
-      if (!existing) {
-        await prisma.grade.create({ data: { name: `Khối ${level}`, level } });
+      if (existing) {
+        await prisma.grade.update({
+          where: { id: existing.id },
+          data: { code, name: `Khối ${level}`, sortOrder: level, isActive: true },
+        });
+      } else {
+        await prisma.grade.create({
+          data: { code, name: `Khối ${level}`, level, sortOrder: level, isActive: true },
+        });
       }
     }
 
     const subjectsData = [
-      { code: 'VIETNAMESE', name: 'Tiếng Việt' },
-      { code: 'MATH', name: 'Toán' },
-      { code: 'SCIENCE', name: 'Khoa học' },
-      { code: 'HISTORY_GEO', name: 'Lịch sử và Địa lí' },
-      { code: 'ETHICS', name: 'Đạo đức' },
-      { code: 'INFORMATICS', name: 'Tin học' },
-      { code: 'TECHNOLOGY', name: 'Công nghệ' },
+      { code: 'TOAN', name: 'Toán', sortOrder: 1 },
+      { code: 'VIETNAMESE', name: 'Tiếng Việt', sortOrder: 2 },
+      { code: 'TA', name: 'Tiếng Anh', sortOrder: 3 },
+      { code: 'SCIENCE', name: 'Khoa học', sortOrder: 4 },
+      { code: 'HISTORY_GEO', name: 'Lịch sử và Địa lí', sortOrder: 5 },
+      { code: 'INFORMATICS', name: 'Tin học', sortOrder: 6 },
+      { code: 'TECHNOLOGY', name: 'Công nghệ', sortOrder: 7 },
+      { code: 'ETHICS', name: 'Đạo đức', sortOrder: 8 },
+      { code: 'AN', name: 'Âm nhạc', sortOrder: 9 },
+      { code: 'MT', name: 'Mĩ thuật', sortOrder: 10 },
+      { code: 'GDTC', name: 'Giáo dục thể chất', sortOrder: 11 },
+      { code: 'HDTN', name: 'Hoạt động trải nghiệm', sortOrder: 12 },
     ];
 
     for (const s of subjectsData) {
       await prisma.subject.upsert({
         where: { code: s.code },
-        update: {},
-        create: s,
+        update: { name: s.name, sortOrder: s.sortOrder, isActive: true, status: 'ACTIVE' },
+        create: { code: s.code, name: s.name, sortOrder: s.sortOrder, isActive: true, status: 'ACTIVE' },
       });
     }
 
@@ -125,95 +148,151 @@ async function main() {
 
   console.log(`Teacher created/ensured: ${teacher.fullName} (${user.email})`);
 
-  let schoolYear = await prisma.schoolYear.findFirst({
-    where: { name: '2026 - 2027' },
+  // SchoolYears & Semesters
+  const sy2526 = await prisma.schoolYear.upsert({
+    where: { name: '2025 - 2026' },
+    update: { isCurrent: false, isActive: true },
+    create: {
+      name: '2025 - 2026',
+      startDate: new Date('2025-09-01'),
+      endDate: new Date('2026-05-31'),
+      isCurrent: false,
+      isActive: true,
+    },
   });
-  if (!schoolYear) {
-    schoolYear = await prisma.schoolYear.create({
-      data: {
-        name: '2026 - 2027',
-        startDate: new Date('2026-09-01'),
-        endDate: new Date('2027-05-31'),
-        isCurrent: true,
-      },
-    });
+
+  await prisma.semester.upsert({
+    where: { schoolYearId_code: { schoolYearId: sy2526.id, code: 'HK1' } },
+    update: { name: 'Học kỳ I', startDate: new Date('2025-09-01'), endDate: new Date('2026-01-15'), sortOrder: 1 },
+    create: { schoolYearId: sy2526.id, code: 'HK1', name: 'Học kỳ I', startDate: new Date('2025-09-01'), endDate: new Date('2026-01-15'), sortOrder: 1, isActive: true },
+  });
+
+  await prisma.semester.upsert({
+    where: { schoolYearId_code: { schoolYearId: sy2526.id, code: 'HK2' } },
+    update: { name: 'Học kỳ II', startDate: new Date('2026-01-16'), endDate: new Date('2026-05-31'), sortOrder: 2 },
+    create: { schoolYearId: sy2526.id, code: 'HK2', name: 'Học kỳ II', startDate: new Date('2026-01-16'), endDate: new Date('2026-05-31'), sortOrder: 2, isActive: true },
+  });
+
+  const sy2627 = await prisma.schoolYear.upsert({
+    where: { name: '2026 - 2027' },
+    update: { isCurrent: true, isActive: true },
+    create: {
+      name: '2026 - 2027',
+      startDate: new Date('2026-09-01'),
+      endDate: new Date('2027-05-31'),
+      isCurrent: true,
+      isActive: true,
+    },
+  });
+
+  await prisma.semester.upsert({
+    where: { schoolYearId_code: { schoolYearId: sy2627.id, code: 'HK1' } },
+    update: { name: 'Học kỳ I', startDate: new Date('2026-09-01'), endDate: new Date('2027-01-15'), sortOrder: 1 },
+    create: { schoolYearId: sy2627.id, code: 'HK1', name: 'Học kỳ I', startDate: new Date('2026-09-01'), endDate: new Date('2027-01-15'), sortOrder: 1, isActive: true },
+  });
+
+  await prisma.semester.upsert({
+    where: { schoolYearId_code: { schoolYearId: sy2627.id, code: 'HK2' } },
+    update: { name: 'Học kỳ II', startDate: new Date('2027-01-16'), endDate: new Date('2027-05-31'), sortOrder: 2 },
+    create: { schoolYearId: sy2627.id, code: 'HK2', name: 'Học kỳ II', startDate: new Date('2027-01-16'), endDate: new Date('2027-05-31'), sortOrder: 2, isActive: true },
+  });
+
+  // Grades (Khối 1 -> Khối 5)
+  const grades: Record<number, any> = {};
+  for (const level of [1, 2, 3, 4, 5]) {
+    const code = `K${level.toString().padStart(2, '0')}`;
+    let g = await prisma.grade.findFirst({ where: { level } });
+    if (g) {
+      grades[level] = await prisma.grade.update({
+        where: { id: g.id },
+        data: { code, name: `Khối ${level}`, sortOrder: level, isActive: true },
+      });
+    } else {
+      grades[level] = await prisma.grade.create({
+        data: { code, name: `Khối ${level}`, level, sortOrder: level, isActive: true },
+      });
+    }
   }
 
-  let grade3 = await prisma.grade.findFirst({ where: { level: 3 } });
-  if (!grade3) grade3 = await prisma.grade.create({ data: { name: 'Khối 3', level: 3 } });
-
-  let grade4 = await prisma.grade.findFirst({ where: { level: 4 } });
-  if (!grade4) grade4 = await prisma.grade.create({ data: { name: 'Khối 4', level: 4 } });
-
-  let grade5 = await prisma.grade.findFirst({ where: { level: 5 } });
-  if (!grade5) grade5 = await prisma.grade.create({ data: { name: 'Khối 5', level: 5 } });
-
+  // Subjects (12 môn chuẩn)
   const subjectsData = [
-    { code: 'VIETNAMESE', name: 'Tiếng Việt' },
-    { code: 'MATH', name: 'Toán' },
-    { code: 'SCIENCE', name: 'Khoa học' },
-    { code: 'HISTORY_GEO', name: 'Lịch sử và Địa lí' },
-    { code: 'ETHICS', name: 'Đạo đức' },
-    { code: 'INFORMATICS', name: 'Tin học' },
-    { code: 'TECHNOLOGY', name: 'Công nghệ' },
+    { code: 'MATH', name: 'Toán', sortOrder: 1 },
+    { code: 'VIETNAMESE', name: 'Tiếng Việt', sortOrder: 2 },
+    { code: 'TA', name: 'Tiếng Anh', sortOrder: 3 },
+    { code: 'SCIENCE', name: 'Khoa học', sortOrder: 4 },
+    { code: 'HISTORY_GEO', name: 'Lịch sử và Địa lí', sortOrder: 5 },
+    { code: 'INFORMATICS', name: 'Tin học', sortOrder: 6 },
+    { code: 'TECHNOLOGY', name: 'Công nghệ', sortOrder: 7 },
+    { code: 'ETHICS', name: 'Đạo đức', sortOrder: 8 },
+    { code: 'AN', name: 'Âm nhạc', sortOrder: 9 },
+    { code: 'MT', name: 'Mĩ thuật', sortOrder: 10 },
+    { code: 'GDTC', name: 'Giáo dục thể chất', sortOrder: 11 },
+    { code: 'HDTN', name: 'Hoạt động trải nghiệm', sortOrder: 12 },
   ];
 
   const subjects: Record<string, any> = {};
   for (const s of subjectsData) {
     subjects[s.code] = await prisma.subject.upsert({
       where: { code: s.code },
-      update: {},
-      create: s,
+      update: { name: s.name, sortOrder: s.sortOrder, isActive: true, status: 'ACTIVE' },
+      create: { code: s.code, name: s.name, sortOrder: s.sortOrder, isActive: true, status: 'ACTIVE' },
     });
   }
 
+  // Classrooms
   let class4A = await prisma.classroom.findFirst({
-    where: { name: 'Lớp 4A', teacherId: teacher.id, schoolYearId: schoolYear.id, deletedAt: null },
+    where: { schoolYearId: sy2627.id, code: '4A', deletedAt: null },
   });
   if (!class4A) {
     class4A = await prisma.classroom.create({
       data: {
+        code: '4A',
         name: 'Lớp 4A',
-        gradeId: grade4.id,
-        schoolYearId: schoolYear.id,
+        gradeId: grades[4].id,
+        schoolYearId: sy2627.id,
         teacherId: teacher.id,
         room: 'Phòng 204',
         schedule: 'Sáng · Thứ 2 - Thứ 6',
         accent: 'teal',
+        isActive: true,
       },
     });
   }
 
   let class4B = await prisma.classroom.findFirst({
-    where: { name: 'Lớp 4B', teacherId: teacher.id, schoolYearId: schoolYear.id, deletedAt: null },
+    where: { schoolYearId: sy2627.id, code: '4B', deletedAt: null },
   });
   if (!class4B) {
     class4B = await prisma.classroom.create({
       data: {
+        code: '4B',
         name: 'Lớp 4B',
-        gradeId: grade4.id,
-        schoolYearId: schoolYear.id,
+        gradeId: grades[4].id,
+        schoolYearId: sy2627.id,
         teacherId: teacher.id,
         room: 'Phòng 101',
         schedule: 'Chiều · Thứ 2 - Thứ 6',
         accent: 'blue',
+        isActive: true,
       },
     });
   }
 
   let class3A = await prisma.classroom.findFirst({
-    where: { name: 'Lớp 3A', teacherId: teacher.id, schoolYearId: schoolYear.id, deletedAt: null },
+    where: { schoolYearId: sy2627.id, code: '3A', deletedAt: null },
   });
   if (!class3A) {
     class3A = await prisma.classroom.create({
       data: {
+        code: '3A',
         name: 'Lớp 3A',
-        gradeId: grade3.id,
-        schoolYearId: schoolYear.id,
+        gradeId: grades[3].id,
+        schoolYearId: sy2627.id,
         teacherId: teacher.id,
         room: 'Phòng 103',
         schedule: 'Sáng · Thứ 2 - Thứ 6',
         accent: 'orange',
+        isActive: true,
       },
     });
   }
@@ -267,6 +346,25 @@ async function main() {
       if (!existingClassStudent) {
         await prisma.classStudent.create({
           data: { classroomId: targetClass.id, studentId: student.id, status: 'ACTIVE' },
+        });
+      }
+
+      const existingEnrollment = await prisma.studentEnrollment.findFirst({
+        where: {
+          studentId: student.id,
+          classroomId: targetClass.id,
+          schoolYearId: targetClass.schoolYearId,
+        },
+      });
+      if (!existingEnrollment) {
+        await prisma.studentEnrollment.create({
+          data: {
+            studentId: student.id,
+            classroomId: targetClass.id,
+            schoolYearId: targetClass.schoolYearId,
+            status: 'ACTIVE',
+            enrolledAt: new Date('2026-09-01'),
+          },
         });
       }
 
@@ -369,9 +467,9 @@ async function main() {
   }
 
   const teachingPlansData = [
-    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.MATH.id, schoolYearId: schoolYear.id, title: 'Phân số bằng nhau', subtitle: 'Toán · Lớp 4A', status: 'Đã lên lịch', meta: '07:30 · Phòng 204', tone: 'teal', room: 'Phòng 204', weekNumber: 3 },
-    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.VIETNAMESE.id, schoolYearId: schoolYear.id, title: 'Luyện tập miêu tả cây cối', subtitle: 'Tiếng Việt · Lớp 4A', status: 'Sắp tới', meta: '09:15 · Phòng 204', tone: 'orange', room: 'Phòng 204', weekNumber: 3 },
-    { teacherId: teacher.id, classroomId: class4B.id, subjectId: subjects.SCIENCE.id, schoolYearId: schoolYear.id, title: 'Âm thanh trong cuộc sống', subtitle: 'Khoa học · Lớp 4B', status: 'Sắp tới', meta: '14:00 · Phòng 101', tone: 'blue', room: 'Phòng 101', weekNumber: 3 },
+    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.MATH.id, schoolYearId: sy2627.id, title: 'Phân số bằng nhau', subtitle: 'Toán · Lớp 4A', status: 'Đã lên lịch', meta: '07:30 · Phòng 204', tone: 'teal', room: 'Phòng 204', weekNumber: 3 },
+    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.VIETNAMESE.id, schoolYearId: sy2627.id, title: 'Luyện tập miêu tả cây cối', subtitle: 'Tiếng Việt · Lớp 4A', status: 'Sắp tới', meta: '09:15 · Phòng 204', tone: 'orange', room: 'Phòng 204', weekNumber: 3 },
+    { teacherId: teacher.id, classroomId: class4B.id, subjectId: subjects.SCIENCE.id, schoolYearId: sy2627.id, title: 'Âm thanh trong cuộc sống', subtitle: 'Khoa học · Lớp 4B', status: 'Sắp tới', meta: '14:00 · Phòng 101', tone: 'blue', room: 'Phòng 101', weekNumber: 3 },
   ];
 
   for (const tp of teachingPlansData) {
@@ -380,6 +478,29 @@ async function main() {
     });
     if (!existing) {
       await prisma.teachingPlan.create({ data: tp });
+    }
+  }
+
+  const assignmentsData = [
+    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.MATH.id, schoolYearId: sy2627.id },
+    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.VIETNAMESE.id, schoolYearId: sy2627.id },
+    { teacherId: teacher.id, classroomId: class4A.id, subjectId: subjects.SCIENCE.id, schoolYearId: sy2627.id },
+    { teacherId: teacher.id, classroomId: class4B.id, subjectId: subjects.MATH.id, schoolYearId: sy2627.id },
+    { teacherId: teacher.id, classroomId: class4B.id, subjectId: subjects.VIETNAMESE.id, schoolYearId: sy2627.id },
+    { teacherId: teacher.id, classroomId: class3A.id, subjectId: subjects.VIETNAMESE.id, schoolYearId: sy2627.id },
+  ];
+
+  for (const asg of assignmentsData) {
+    const existing = await prisma.teachingAssignment.findFirst({
+      where: {
+        teacherId: asg.teacherId,
+        classroomId: asg.classroomId,
+        subjectId: asg.subjectId,
+        schoolYearId: asg.schoolYearId,
+      },
+    });
+    if (!existing) {
+      await prisma.teachingAssignment.create({ data: { ...asg, isActive: true } });
     }
   }
 

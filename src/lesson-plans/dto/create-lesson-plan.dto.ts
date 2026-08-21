@@ -35,7 +35,12 @@ export class CreateLessonPlanDto {
   @IsString()
   objective?: string;
 
-  @ApiPropertyOptional({ description: 'ID môn học' })
+  @ApiPropertyOptional({ description: 'ID phân công giảng dạy (Nguồn chuẩn cho Teacher, Classroom, Subject, SchoolYear)' })
+  @IsOptional()
+  @IsString()
+  teachingAssignmentId?: string;
+
+  @ApiPropertyOptional({ description: 'ID môn học (legacy compatibility)' })
   @IsOptional()
   @IsString()
   subjectId?: string;

@@ -1,26 +1,36 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsBoolean } from 'class-validator';
 
 export class CreateClassroomDto {
-  @ApiProperty({ example: 'Lớp 4A' })
+  @ApiProperty({ description: 'Tên lớp học, ví dụ: Lớp 4A1', example: 'Lớp 4A1' })
   @IsString({ message: 'Tên lớp phải là chuỗi ký tự' })
   @IsNotEmpty({ message: 'Tên lớp không được để trống' })
   name: string;
 
-  @ApiPropertyOptional({ example: 'Khối 4' })
+  @ApiPropertyOptional({ description: 'Mã lớp (duy nhất theo năm học), ví dụ: 4A1', example: '4A1' })
   @IsOptional()
-  @IsString()
-  gradeName?: string;
+  @IsString({ message: 'Mã lớp phải là chuỗi ký tự' })
+  code?: string;
 
-  @ApiPropertyOptional({ description: 'ID Khối lớp' })
-  @IsOptional()
-  @IsString()
-  gradeId?: string;
+  @ApiProperty({ description: 'ID Khối lớp', example: '14cf8399-d149-46a6-b44c-f9b4cbbbae1e' })
+  @IsString({ message: 'Mã khối lớp (gradeId) phải là chuỗi ký tự' })
+  @IsNotEmpty({ message: 'Khối lớp không được để trống' })
+  gradeId: string;
 
-  @ApiPropertyOptional({ description: 'ID Năm học' })
+  @ApiProperty({ description: 'ID Năm học', example: 'e9e50c01-6ebd-43cf-a128-abca025b0bff' })
+  @IsString({ message: 'Mã năm học (schoolYearId) phải là chuỗi ký tự' })
+  @IsNotEmpty({ message: 'Năm học không được để trống' })
+  schoolYearId: string;
+
+  @ApiPropertyOptional({ description: 'ID Giáo viên chủ nhiệm' })
   @IsOptional()
   @IsString()
-  schoolYearId?: string;
+  homeroomTeacherId?: string;
+
+  @ApiPropertyOptional({ description: 'ID Giáo viên (tương thích backward)' })
+  @IsOptional()
+  @IsString()
+  teacherId?: string;
 
   @ApiPropertyOptional({ example: 'Phòng 204' })
   @IsOptional()
@@ -36,4 +46,14 @@ export class CreateClassroomDto {
   @IsOptional()
   @IsString()
   accent?: string;
+
+  @ApiPropertyOptional({ example: 'ACTIVE' })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @ApiPropertyOptional({ example: true, default: true })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }

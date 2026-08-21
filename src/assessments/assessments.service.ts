@@ -6,17 +6,24 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { CreateAssessmentDto } from './dto/create-assessment.dto';
 import { UpdateAssessmentDto, BulkStudentAssessmentDto } from './dto/bulk-student-assessment.dto';
 
 @Injectable()
 export class AssessmentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private assignmentAuth: TeachingAssignmentAuthorizationService,
+  ) {}
 
   async findAll(teacherId?: string) {
     const where: any = { deletedAt: null };
     if (teacherId) {
-      where.teacherId = teacherId;
+      where.OR = [
+        { teacherId },
+        { teachingAssignment: { teacherId } },
+      ];
     }
 
     const list = await this.prisma.assessment.findMany({
@@ -24,6 +31,14 @@ export class AssessmentsService {
       include: {
         classroom: true,
         subject: true,
+        schoolYear: true,
+        teachingAssignment: {
+          include: {
+            subject: true,
+            classroom: { include: { grade: true } },
+            schoolYear: true,
+          },
+        },
         criteria: { orderBy: { sortOrder: 'asc' } },
         studentAssessments: true,
       },
@@ -37,15 +52,16 @@ export class AssessmentsService {
     const assessment = await this.prisma.assessment.findUnique({
       where: { id },
       include: {
-        classroom: {
+        classroom: true,
+        subject: true,
+        schoolYear: true,
+        teachingAssignment: {
           include: {
-            classStudents: {
-              where: { status: 'ACTIVE', student: { deletedAt: null } },
-              include: { student: true },
-            },
+            subject: true,
+            classroom: { include: { grade: true } },
+            schoolYear: true,
           },
         },
-        subject: true,
         criteria: { orderBy: { sortOrder: 'asc' } },
         studentAssessments: {
           include: { student: true, criterion: true },
@@ -57,49 +73,106 @@ export class AssessmentsService {
       throw new NotFoundException(`Không tìm thấy đánh giá ${id}`);
     }
 
-    if (teacherId && assessment.teacherId !== teacherId) {
+    const ownerTeacherId = assessment.teachingAssignment?.teacherId || assessment.teacherId;
+    if (teacherId && ownerTeacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền truy cập đánh giá này');
     }
 
-    return this.mapAssessmentDetail(assessment);
+    const enrollments = await this.prisma.studentEnrollment.findMany({
+      where: {
+        classroomId: assessment.classroomId,
+        status: { in: ['ACTIVE', 'COMPLETED', 'TRANSFERRED'] },
+        student: { deletedAt: null },
+      },
+      include: { student: true },
+      orderBy: { student: { fullName: 'asc' } },
+    });
+
+    return this.mapAssessmentDetail(assessment, enrollments.map((e) => e.student));
   }
 
   async create(dto: CreateAssessmentDto, teacherId: string) {
-    let classroomId = dto.classroomId;
-    if (classroomId) {
+    let assignmentId: string | null = null;
+    let effectiveClassroomId = dto.classroomId;
+    let effectiveSubjectId = dto.subjectId;
+    let effectiveSchoolYearId = dto.schoolYearId;
+    let effectiveSubtitle = dto.subtitle;
+
+    if (dto.teachingAssignmentId) {
+      const asg = await this.assignmentAuth.validateAssignmentForCreate(
+        dto.teachingAssignmentId,
+        teacherId,
+      );
+      assignmentId = asg.id;
+      effectiveClassroomId = asg.classroomId;
+      effectiveSubjectId = asg.subjectId;
+      effectiveSchoolYearId = asg.schoolYearId;
+      effectiveSubtitle = `${asg.subject?.name || 'Môn học'} · ${asg.classroom?.name || 'Lớp'}`;
+    } else if (dto.classroomId) {
       const cls = await this.prisma.classroom.findUnique({
-        where: { id: classroomId },
+        where: { id: dto.classroomId },
+        include: {
+          teachingAssignments: {
+            where: { teacherId, isActive: true },
+            include: { subject: true },
+          },
+        },
       });
-      if (!cls || cls.deletedAt || cls.teacherId !== teacherId) {
+      if (!cls || cls.deletedAt) {
+        throw new NotFoundException(`Không tìm thấy lớp học với mã ${dto.classroomId}`);
+      }
+      const isHomeroom = cls.teacherId === teacherId;
+      const hasAssignment = cls.teachingAssignments && cls.teachingAssignments.length > 0;
+      if (!isHomeroom && !hasAssignment) {
         throw new ForbiddenException('Bạn không có quyền tạo đánh giá cho lớp học này');
       }
-    } else {
-      const cls = await this.prisma.classroom.findFirst({
-        where: { teacherId, deletedAt: null },
-      });
-      classroomId = cls?.id;
+
+      const matchingAsg = dto.subjectId
+        ? cls.teachingAssignments?.find((a) => a.subjectId === dto.subjectId)
+        : cls.teachingAssignments?.[0];
+
+      if (matchingAsg) {
+        assignmentId = matchingAsg.id;
+        effectiveSubjectId = matchingAsg.subjectId;
+        effectiveSchoolYearId = matchingAsg.schoolYearId;
+        effectiveSubtitle = `${matchingAsg.subject?.name || 'Môn học'} · ${cls.name}`;
+      } else {
+        effectiveSchoolYearId = cls.schoolYearId;
+      }
     }
 
-    if (!classroomId) {
-      const sy = await this.prisma.schoolYear.findFirst() || await this.prisma.schoolYear.create({
+    if (!effectiveClassroomId) {
+      const sy = (await this.prisma.schoolYear.findFirst()) || (await this.prisma.schoolYear.create({
         data: { name: '2026 - 2027', startDate: new Date('2026-09-01'), endDate: new Date('2027-05-31') },
-      });
-      const grade = await this.prisma.grade.findFirst() || await this.prisma.grade.create({
+      }));
+      const grade = (await this.prisma.grade.findFirst()) || (await this.prisma.grade.create({
         data: { name: 'Khối 4', level: 4 },
-      });
+      }));
       const cls = await this.prisma.classroom.create({
-        data: { name: 'Lớp 4A', gradeId: grade.id, schoolYearId: sy.id, teacherId },
+        data: { code: '4A', name: 'Lớp 4A', gradeId: grade.id, schoolYearId: sy.id, teacherId },
       });
-      classroomId = cls.id;
+      effectiveClassroomId = cls.id;
+      effectiveSchoolYearId = sy.id;
+    }
+
+    if (effectiveSchoolYearId && this.prisma.schoolYear) {
+      const sy = await this.prisma.schoolYear.findUnique({
+        where: { id: effectiveSchoolYearId },
+      });
+      if (sy && !sy.isActive) {
+        throw new BadRequestException('Không thể tạo đánh giá cho năm học đã ngừng hoạt động');
+      }
     }
 
     const assessment = await this.prisma.assessment.create({
       data: {
         teacherId,
-        classroomId,
-        subjectId: dto.subjectId,
+        teachingAssignmentId: assignmentId,
+        classroomId: effectiveClassroomId,
+        subjectId: effectiveSubjectId,
+        schoolYearId: effectiveSchoolYearId,
         title: dto.title,
-        subtitle: dto.subtitle || 'Toán · Lớp 4A',
+        subtitle: effectiveSubtitle || 'Toán · Lớp 4A',
         status: dto.status || 'Đang thực hiện',
         meta: dto.meta || '32 học sinh',
         tone: dto.tone || 'teal',
@@ -126,12 +199,16 @@ export class AssessmentsService {
   }
 
   async update(id: string, dto: UpdateAssessmentDto, teacherId: string) {
-    const existing = await this.prisma.assessment.findUnique({ where: { id } });
+    const existing = await this.prisma.assessment.findUnique({
+      where: { id },
+      include: { teachingAssignment: true },
+    });
     if (!existing || existing.deletedAt) {
       throw new NotFoundException('Không tìm thấy đánh giá');
     }
 
-    if (existing.teacherId !== teacherId) {
+    const ownerTeacherId = existing.teachingAssignment?.teacherId || existing.teacherId;
+    if (ownerTeacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền chỉnh sửa đánh giá này');
     }
 
@@ -161,12 +238,16 @@ export class AssessmentsService {
   }
 
   async remove(id: string, teacherId: string) {
-    const existing = await this.prisma.assessment.findUnique({ where: { id } });
+    const existing = await this.prisma.assessment.findUnique({
+      where: { id },
+      include: { teachingAssignment: true },
+    });
     if (!existing || existing.deletedAt) {
       throw new NotFoundException('Không tìm thấy đánh giá');
     }
 
-    if (existing.teacherId !== teacherId) {
+    const ownerTeacherId = existing.teachingAssignment?.teacherId || existing.teacherId;
+    if (ownerTeacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền xóa đánh giá này');
     }
 
@@ -182,14 +263,8 @@ export class AssessmentsService {
     const assessment = await this.prisma.assessment.findUnique({
       where: { id },
       include: {
-        classroom: {
-          include: {
-            classStudents: {
-              where: { status: 'ACTIVE' },
-              select: { studentId: true },
-            },
-          },
-        },
+        teachingAssignment: true,
+        criteria: true,
       },
     });
 
@@ -197,19 +272,29 @@ export class AssessmentsService {
       throw new NotFoundException('Không tìm thấy đánh giá');
     }
 
-    if (assessment.teacherId !== teacherId) {
+    const ownerTeacherId = assessment.teachingAssignment?.teacherId || assessment.teacherId;
+    if (ownerTeacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền chấm đánh giá này');
     }
 
-    const validStudentIds = new Set(
-      assessment.classroom.classStudents.map((cs) => cs.studentId),
+    // Validate score bounds
+    for (const item of dto.assessments) {
+      if (item.score !== undefined && item.score !== null && (item.score < 0 || item.score > 10)) {
+        throw new BadRequestException('Điểm số phải nằm trong thang điểm từ 0 đến 10');
+      }
+    }
+
+    // Validate student enrollment membership
+    await this.assignmentAuth.assertStudentsEnrolled(
+      assessment.classroomId,
+      dto.assessments.map((a) => a.studentId),
     );
 
+    // Validate nested criterion ID ownership
+    const validCriterionIds = new Set(assessment.criteria.map((c) => c.id));
     for (const item of dto.assessments) {
-      if (!validStudentIds.has(item.studentId)) {
-        throw new BadRequestException(
-          `Học sinh với ID ${item.studentId} không thuộc lớp học của đánh giá này`,
-        );
+      if (item.criterionId && !validCriterionIds.has(item.criterionId)) {
+        throw new BadRequestException('Tiêu chí đánh giá không thuộc bài đánh giá này');
       }
     }
 
@@ -259,14 +344,19 @@ export class AssessmentsService {
       meta: a.meta || `${a.studentAssessments?.length || 0} học sinh`,
       tone: a.tone || 'teal',
       version: a.version,
+      teachingAssignmentId: a.teachingAssignmentId,
+      classroomId: a.classroomId,
+      subjectId: a.subjectId,
+      schoolYearId: a.schoolYearId,
     };
   }
 
-  private mapAssessmentDetail(a: any) {
+  private mapAssessmentDetail(a: any, students?: any[]) {
     return {
       ...this.mapAssessment(a),
       criteria: a.criteria || [],
       studentAssessments: a.studentAssessments || [],
+      students: students || [],
     };
   }
 }

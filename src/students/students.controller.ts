@@ -102,4 +102,13 @@ export class StudentsController {
   ) {
     return this.studentsService.getComments(id, user.teacherId);
   }
+
+  @Get(':id/enrollments')
+  @ApiOperation({ summary: 'Lấy lịch sử ghi danh và phân lớp của học sinh' })
+  async getEnrollments(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.studentsService.getEnrollments(id, user.teacherId);
+  }
 }

@@ -18,6 +18,8 @@ import { StorageService } from '../resources/storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 
+import { TeachingAssignmentAuthorizationService } from './services/teaching-assignment-authorization.service';
+
 describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
   const teacherAId = 'teacher-A-uuid';
   const teacherBId = 'teacher-B-uuid';
@@ -91,6 +93,16 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
     teacher: {
       findUnique: jest.fn(),
     },
+    teachingAssignment: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+    },
+    studentEnrollment: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+    },
     $transaction: jest.fn((cb) => (typeof cb === 'function' ? cb(mockPrisma) : Promise.all(cb))),
   };
 
@@ -111,6 +123,7 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        TeachingAssignmentAuthorizationService,
         ClassroomsService,
         LessonPlansService,
         WorksheetsService,

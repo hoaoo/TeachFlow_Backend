@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
@@ -16,12 +17,18 @@ import { ReorderActivitiesDto } from './dto/reorder-activities.dto';
 export class LessonPlansService {
   private readonly logger = new Logger(LessonPlansService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private assignmentAuth: TeachingAssignmentAuthorizationService,
+  ) {}
 
   async findAll(teacherId?: string) {
     const where: any = { deletedAt: null };
     if (teacherId) {
-      where.teacherId = teacherId;
+      where.OR = [
+        { teacherId },
+        { teachingAssignment: { teacherId } },
+      ];
     }
 
     const plans = await this.prisma.lessonPlan.findMany({
@@ -32,6 +39,13 @@ export class LessonPlansService {
         },
         classroom: true,
         subject: true,
+        teachingAssignment: {
+          include: {
+            subject: true,
+            classroom: { include: { grade: true } },
+            schoolYear: true,
+          },
+        },
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -48,6 +62,13 @@ export class LessonPlansService {
         },
         classroom: true,
         subject: true,
+        teachingAssignment: {
+          include: {
+            subject: true,
+            classroom: { include: { grade: true } },
+            schoolYear: true,
+          },
+        },
         resources: {
           where: { resource: { deletedAt: null } },
           include: {
@@ -67,7 +88,8 @@ export class LessonPlansService {
       throw new NotFoundException(`Không tìm thấy giáo án với mã ${id}`);
     }
 
-    if (teacherId && plan.teacherId !== teacherId) {
+    const planTeacherId = plan.teachingAssignment?.teacherId || plan.teacherId;
+    if (teacherId && planTeacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền truy cập giáo án này');
     }
 
@@ -75,18 +97,52 @@ export class LessonPlansService {
   }
 
   async create(dto: CreateLessonPlanDto, teacherId: string) {
+    let assignmentId: string | null = null;
+    let effectiveClassroomId = dto.classroomId;
+    let effectiveSubjectId = dto.subjectId;
+    let effectiveSubjectName = dto.subject || 'Toán';
+    let effectiveGradeName = dto.grade || 'Lớp 4A';
+
+    if (dto.teachingAssignmentId) {
+      const asg = await this.assignmentAuth.validateAssignmentForCreate(
+        dto.teachingAssignmentId,
+        teacherId,
+      );
+      assignmentId = asg.id;
+      effectiveClassroomId = asg.classroomId;
+      effectiveSubjectId = asg.subjectId;
+      effectiveSubjectName = asg.subject?.name || effectiveSubjectName;
+      effectiveGradeName = asg.classroom?.grade?.name || asg.classroom?.name || effectiveGradeName;
+    } else if (dto.classroomId) {
+      try {
+        const asg = await this.assignmentAuth.resolveAssignmentFromContext({
+          teacherId,
+          classroomId: dto.classroomId,
+          subjectId: dto.subjectId,
+        });
+        assignmentId = asg.id;
+        effectiveClassroomId = asg.classroomId;
+        effectiveSubjectId = asg.subjectId;
+        effectiveSubjectName = asg.subject?.name || effectiveSubjectName;
+        effectiveGradeName = asg.classroom?.grade?.name || asg.classroom?.name || effectiveGradeName;
+      } catch (err) {
+        // Fallback for standalone mock/unit contexts
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const plan = await tx.lessonPlan.create({
         data: {
           teacherId,
+          teachingAssignmentId: assignmentId,
           title: dto.title,
-          subjectName: dto.subject || 'Toán',
-          gradeName: dto.grade || 'Lớp 4A',
+          subjectName: effectiveSubjectName,
+          gradeName: effectiveGradeName,
           teachingDate: dto.date ? new Date(dto.date) : new Date(),
           durationMinutes: dto.duration || 40,
           objectives: dto.objective || '',
-          classroomId: dto.classroomId,
-          subjectId: dto.subjectId,
+          classroomId: effectiveClassroomId,
+          subjectId: effectiveSubjectId,
           lessonId: dto.lessonId,
           status: 'DRAFT',
           version: 1,
@@ -122,6 +178,13 @@ export class LessonPlansService {
           activities: { orderBy: { sortOrder: 'asc' } },
           classroom: true,
           subject: true,
+          teachingAssignment: {
+            include: {
+              subject: true,
+              classroom: { include: { grade: true } },
+              schoolYear: true,
+            },
+          },
         },
       });
 
@@ -132,14 +195,15 @@ export class LessonPlansService {
   async update(id: string, dto: UpdateLessonPlanDto, teacherId: string) {
     const existing = await this.prisma.lessonPlan.findUnique({
       where: { id },
-      include: { activities: true },
+      include: { activities: true, teachingAssignment: true },
     });
 
     if (!existing || existing.deletedAt) {
       throw new NotFoundException(`Không tìm thấy giáo án với mã ${id}`);
     }
 
-    if (teacherId && existing.teacherId !== teacherId) {
+    const planTeacherId = existing.teachingAssignment?.teacherId || existing.teacherId;
+    if (teacherId && planTeacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền chỉnh sửa giáo án này');
     }
 

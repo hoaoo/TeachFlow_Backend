@@ -95,7 +95,7 @@ export class TeachingPlansService {
       });
 
       const cls = await this.prisma.classroom.create({
-        data: { name: 'Lớp 4A', gradeId: grade.id, schoolYearId, teacherId, room: 'Phòng 204' },
+        data: { code: '4A', name: 'Lớp 4A', gradeId: grade.id, schoolYearId, teacherId, room: 'Phòng 204' },
       });
       classroomId = cls.id;
     }

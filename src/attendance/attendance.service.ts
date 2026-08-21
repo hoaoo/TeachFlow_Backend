@@ -5,11 +5,15 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { SaveAttendanceDto, AttendanceStatusEnum } from './dto/save-attendance.dto';
 
 @Injectable()
 export class AttendanceService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private assignmentAuth: TeachingAssignmentAuthorizationService,
+  ) {}
 
   async getAttendance(classId: string, dateStr: string, teacherId?: string) {
     if (!classId) {
@@ -24,25 +28,36 @@ export class AttendanceService {
 
     const classroom = await this.prisma.classroom.findUnique({
       where: { id: classId },
-      include: {
-        classStudents: {
-          where: { status: 'ACTIVE', student: { deletedAt: null } },
-          include: { student: true },
-          orderBy: { student: { fullName: 'asc' } },
-        },
-      },
     });
 
     if (!classroom || classroom.deletedAt) {
       throw new NotFoundException('Lớp học không tồn tại');
     }
 
-    if (teacherId && classroom.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền truy cập lớp học này');
+    if (teacherId) {
+      await this.assignmentAuth.assertTeacherCanAccessClassroomAttendance(classId, teacherId);
     }
 
     const targetDate = dateStr ? new Date(dateStr) : new Date();
     targetDate.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // Fetch students active on targetDate via StudentEnrollment (temporal accuracy)
+    const enrollments = await this.prisma.studentEnrollment.findMany({
+      where: {
+        classroomId: classId,
+        enrolledAt: { lte: endOfDay },
+        OR: [
+          { leftAt: null },
+          { leftAt: { gte: targetDate } },
+        ],
+        status: { in: ['ACTIVE', 'TRANSFERRED', 'COMPLETED'] },
+        student: { deletedAt: null },
+      },
+      include: { student: true },
+      orderBy: { student: { fullName: 'asc' } },
+    });
 
     const session = await this.prisma.attendanceSession.findUnique({
       where: {
@@ -60,8 +75,8 @@ export class AttendanceService {
       session?.attendances.map((a) => [a.studentId, a]) || [],
     );
 
-    const students = classroom.classStudents.map((cs) => {
-      const s = cs.student;
+    const students = enrollments.map((enr) => {
+      const s = enr.student;
       const att = attendanceMap.get(s.id);
       return {
         studentId: s.id,
@@ -91,31 +106,33 @@ export class AttendanceService {
   async saveAttendance(dto: SaveAttendanceDto, teacherId: string) {
     const classroom = await this.prisma.classroom.findUnique({
       where: { id: dto.classId },
-      include: {
-        classStudents: {
-          where: { status: 'ACTIVE' },
-          select: { studentId: true },
-        },
-      },
+      include: { schoolYear: true },
     });
 
     if (!classroom || classroom.deletedAt) {
       throw new NotFoundException('Lớp học không tồn tại');
     }
 
-    if (classroom.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền điểm danh cho lớp học này');
+    if (classroom.schoolYear && !classroom.schoolYear.isActive) {
+      throw new BadRequestException('Không thể điểm danh cho lớp học thuộc năm học đã ngừng hoạt động');
     }
 
-    const validStudentIds = new Set(classroom.classStudents.map((cs) => cs.studentId));
-    for (const item of dto.attendances) {
-      if (!validStudentIds.has(item.studentId)) {
-        throw new BadRequestException(`Học sinh với ID ${item.studentId} không thuộc lớp học này`);
-      }
-    }
+    await this.assignmentAuth.assertTeacherCanAccessClassroomAttendance(dto.classId, teacherId);
 
     const targetDate = new Date(dto.date);
     targetDate.setHours(0, 0, 0, 0);
+
+    // Validate that every submitted student has a valid enrollment at targetDate
+    await this.assignmentAuth.assertStudentsEnrolled(
+      dto.classId,
+      dto.attendances.map((a) => a.studentId),
+      targetDate,
+    );
+
+    // Try finding matching assignment for teacher in this classroom
+    const assignment = await this.prisma.teachingAssignment.findFirst({
+      where: { teacherId, classroomId: dto.classId, isActive: true },
+    });
 
     return this.prisma.$transaction(async (tx) => {
       let session = await tx.attendanceSession.findUnique({
@@ -138,6 +155,7 @@ export class AttendanceService {
           data: {
             classroomId: dto.classId,
             teacherId,
+            teachingAssignmentId: assignment?.id || null,
             attendanceDate: targetDate,
             sessionPeriod: dto.sessionPeriod || 'MORNING',
             title,
@@ -189,7 +207,11 @@ export class AttendanceService {
   async getHistory(teacherId?: string) {
     const where: any = {};
     if (teacherId) {
-      where.teacherId = teacherId;
+      where.OR = [
+        { teacherId },
+        { classroom: { teacherId } },
+        { teachingAssignment: { teacherId } },
+      ];
     }
 
     const sessions = await this.prisma.attendanceSession.findMany({

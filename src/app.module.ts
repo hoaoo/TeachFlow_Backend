@@ -24,7 +24,11 @@ import { AiModule } from './ai/ai.module';
 import { ExportModule } from './export/export.module';
 import { AdminModule } from './admin/admin.module';
 import { HomeroomModule } from './homeroom/homeroom.module';
+import { SemestersModule } from './semesters/semesters.module';
+import { StudentEnrollmentsModule } from './student-enrollments/student-enrollments.module';
+import { TeachingAssignmentsModule } from './teaching-assignments/teaching-assignments.module';
 import { HealthModule } from './health/health.module';
+import { CommonModule } from './common/common.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
@@ -41,11 +45,13 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
       },
     ]),
     PrismaModule,
+    CommonModule,
     HealthModule,
     AuthModule,
     UsersModule,
     TeachersModule,
     SchoolYearsModule,
+    SemestersModule,
     GradesModule,
     SubjectsModule,
     ClassroomsModule,
@@ -64,6 +70,8 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     ExportModule,
     AdminModule,
     HomeroomModule,
+    StudentEnrollmentsModule,
+    TeachingAssignmentsModule,
   ],
   providers: [
     {

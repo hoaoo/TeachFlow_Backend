@@ -40,15 +40,25 @@ export class CreateAssessmentDto {
   @IsString()
   tone?: 'teal' | 'blue' | 'orange' | 'violet';
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'ID phân công giảng dạy (Nguồn chuẩn)' })
+  @IsOptional()
+  @IsString()
+  teachingAssignmentId?: string;
+
+  @ApiPropertyOptional({ description: 'ID lớp học (legacy compatibility)' })
   @IsOptional()
   @IsString()
   classroomId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'ID môn học (legacy compatibility)' })
   @IsOptional()
   @IsString()
   subjectId?: string;
+
+  @ApiPropertyOptional({ description: 'ID năm học (legacy compatibility)' })
+  @IsOptional()
+  @IsString()
+  schoolYearId?: string;
 
   @ApiPropertyOptional({ type: [CreateCriterionDto] })
   @IsOptional()
