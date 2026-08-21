@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStudentDto } from './dto/create-student.dto';
@@ -126,13 +127,39 @@ export class StudentsService {
   }
 
   async create(dto: CreateStudentDto, teacherId: string) {
+    let classId = dto.classId;
+    if (!classId && teacherId) {
+      const teacherClass = await this.prisma.classroom.findFirst({
+        where: { teacherId, deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (teacherClass) {
+        classId = teacherClass.id;
+      }
+    }
+
     let classroom: any = null;
-    if (dto.classId) {
+    if (classId) {
       classroom = await this.prisma.classroom.findUnique({
-        where: { id: dto.classId },
+        where: { id: classId },
       });
       if (!classroom || classroom.deletedAt || (teacherId && classroom.teacherId !== teacherId)) {
         throw new ForbiddenException('Bạn không có quyền thêm học sinh vào lớp học này');
+      }
+
+      const existingInClass = await this.prisma.classStudent.findFirst({
+        where: {
+          classroomId: classId,
+          status: 'ACTIVE',
+          student: {
+            fullName: dto.fullName.trim(),
+            deletedAt: null,
+          },
+        },
+      });
+
+      if (existingInClass) {
+        throw new ConflictException(`Học sinh "${dto.fullName.trim()}" đã có tên trong danh sách lớp`);
       }
     }
 
@@ -149,7 +176,7 @@ export class StudentsService {
     return this.prisma.$transaction(async (tx) => {
       const student = await tx.student.create({
         data: {
-          fullName: dto.fullName,
+          fullName: dto.fullName.trim(),
           initials,
           gender: dto.gender === 'Nữ' ? 'FEMALE' : 'MALE',
           dobString: dto.dob || 'Chưa cập nhật',
@@ -160,12 +187,12 @@ export class StudentsService {
         },
       });
 
-      if (dto.classId && classroom) {
+      if (classId && classroom) {
         await tx.studentEnrollment.create({
           data: {
             studentId: student.id,
             schoolYearId: classroom.schoolYearId,
-            classroomId: dto.classId,
+            classroomId: classId,
             status: 'ACTIVE',
             enrolledAt: new Date(),
             note: dto.note,
@@ -174,7 +201,7 @@ export class StudentsService {
 
         await tx.classStudent.create({
           data: {
-            classroomId: dto.classId,
+            classroomId: classId,
             studentId: student.id,
             status: 'ACTIVE',
           },
@@ -185,7 +212,7 @@ export class StudentsService {
             data: {
               studentId: student.id,
               teacherId,
-              classroomId: dto.classId,
+              classroomId: classId,
               content: dto.note,
             },
           });
