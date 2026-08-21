@@ -9,9 +9,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateTeachingAssignmentDto } from './dto/create-teaching-assignment.dto';
 import { UpdateTeachingAssignmentDto } from './dto/update-teaching-assignment.dto';
-import { Role } from '@prisma/client';
+import { Role, NotificationType } from '@prisma/client';
 
 @Injectable()
 export class TeachingAssignmentsService {
@@ -20,6 +21,7 @@ export class TeachingAssignmentsService {
   constructor(
     private prisma: PrismaService,
     @Optional() private auditService?: AuditService,
+    @Optional() private notificationsService?: NotificationsService,
   ) {}
 
   async findAll(options?: {
@@ -245,6 +247,14 @@ export class TeachingAssignmentsService {
         resourceId: assignment.id,
         targetUserId: dto.teacherId,
         details: { teacherId: dto.teacherId, classroomId: dto.classroomId, subjectId: dto.subjectId, schoolYearId: targetSchoolYearId },
+      });
+
+      // Send in-app notification to teacher
+      this.notificationsService?.createNotification({
+        teacherId: dto.teacherId,
+        title: 'Phân công giảng dạy mới',
+        message: `Bạn được phân công giảng dạy môn ${assignment.subject.name} tại lớp ${assignment.classroom.name} (${assignment.schoolYear.name}).`,
+        type: NotificationType.ASSIGNMENT,
       });
 
       return this.mapAssignment(assignment);
