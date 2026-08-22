@@ -7,14 +7,16 @@ import {
   Delete,
   Param,
   Body,
+  Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { LessonPlansService } from './lesson-plans.service';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
 import { UpdateActivityDto } from './dto/update-activity.dto';
 import { ReorderActivitiesDto } from './dto/reorder-activities.dto';
+import { SaveActivityToLibraryDto } from './dto/save-to-library.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Lesson Plans')
@@ -24,9 +26,30 @@ export class LessonPlansController {
   constructor(private lessonPlansService: LessonPlansService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Lấy danh sách giáo án' })
-  async findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.lessonPlansService.findAll(user.teacherId);
+  @ApiOperation({ summary: 'Lấy danh sách giáo án (hỗ trợ tìm kiếm và lọc)' })
+  @ApiQuery({ name: 'classroomId', required: false, description: 'Lọc theo lớp' })
+  @ApiQuery({ name: 'subjectId', required: false, description: 'Lọc theo môn' })
+  @ApiQuery({ name: 'status', required: false, description: 'Lọc theo trạng thái (DRAFT, COMPLETED, TAUGHT)' })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'Từ ngày (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'Đến ngày (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Tìm kiếm tên bài, môn, lớp...' })
+  async findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('classroomId') classroomId?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.lessonPlansService.findAll(user.teacherId, {
+      classroomId,
+      subjectId,
+      status,
+      dateFrom,
+      dateTo,
+      search,
+    });
   }
 
   @Get(':id')
@@ -71,8 +94,9 @@ export class LessonPlansController {
   async duplicate(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Body() options?: { classroomId?: string; date?: string; title?: string },
   ) {
-    return this.lessonPlansService.duplicate(id, user.teacherId);
+    return this.lessonPlansService.duplicate(id, user.teacherId, options);
   }
 
   @Post(':id/activities')
@@ -114,6 +138,56 @@ export class LessonPlansController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.reorderActivities(id, dto, user.teacherId);
+  }
+
+  @Post(':id/activities/:activityId/save-to-library')
+  @ApiOperation({ summary: 'Lưu hoạt động vào thư viện cá nhân' })
+  async saveActivityToLibrary(
+    @Param('id') id: string,
+    @Param('activityId') activityId: string,
+    @Body() dto: SaveActivityToLibraryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.saveActivityToLibrary(id, activityId, dto, user.teacherId);
+  }
+
+  @Get(':id/versions')
+  @ApiOperation({ summary: 'Lấy lịch sử phiên bản giáo án' })
+  async getVersions(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.getVersions(id, user.teacherId);
+  }
+
+  @Post(':id/restore/:versionId')
+  @ApiOperation({ summary: 'Khôi phục giáo án về một phiên bản trước' })
+  async restoreVersion(
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.restoreVersion(id, versionId, user.teacherId);
+  }
+
+  @Post(':id/schedules/:scheduleId')
+  @ApiOperation({ summary: 'Liên kết giáo án với một tiết trong lịch dạy' })
+  async linkSchedule(
+    @Param('id') id: string,
+    @Param('scheduleId') scheduleId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.linkSchedule(id, scheduleId, user.teacherId);
+  }
+
+  @Delete(':id/schedules/:scheduleId')
+  @ApiOperation({ summary: 'Gỡ liên kết giáo án khỏi một tiết trong lịch dạy' })
+  async unlinkSchedule(
+    @Param('id') id: string,
+    @Param('scheduleId') scheduleId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.unlinkSchedule(id, scheduleId, user.teacherId);
   }
 
   @Get(':id/resources')

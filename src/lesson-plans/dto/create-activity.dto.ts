@@ -38,6 +38,11 @@ export class CreateActivityDto {
   @IsString()
   qualities?: string;
 
+  @ApiPropertyOptional({ example: 'Máy chiếu, thẻ số, bảng phụ' })
+  @IsOptional()
+  @IsString()
+  equipment?: string;
+
   @ApiPropertyOptional({ example: 'Tạo hứng thú và kết nối kiến thức.' })
   @IsOptional()
   @IsString()

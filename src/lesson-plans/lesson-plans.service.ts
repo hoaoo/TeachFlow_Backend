@@ -4,14 +4,17 @@ import {
   ForbiddenException,
   ConflictException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
 import { UpdateActivityDto } from './dto/update-activity.dto';
 import { ReorderActivitiesDto } from './dto/reorder-activities.dto';
+import { SaveActivityToLibraryDto } from './dto/save-to-library.dto';
 
 @Injectable()
 export class LessonPlansService {
@@ -20,14 +23,60 @@ export class LessonPlansService {
   constructor(
     private prisma: PrismaService,
     private assignmentAuth: TeachingAssignmentAuthorizationService,
+    @Optional() private auditService?: AuditService,
   ) {}
 
-  async findAll(teacherId?: string) {
-    const where: any = { deletedAt: null };
-    if (teacherId) {
-      where.OR = [
+  async findAll(
+    teacherId: string,
+    filters?: {
+      classroomId?: string;
+      subjectId?: string;
+      status?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      search?: string;
+    },
+  ) {
+    const where: any = {
+      deletedAt: null,
+      OR: [
         { teacherId },
         { teachingAssignment: { teacherId } },
+      ],
+    };
+
+    if (filters?.classroomId) {
+      where.classroomId = filters.classroomId;
+    }
+    if (filters?.subjectId) {
+      where.subjectId = filters.subjectId;
+    }
+    if (filters?.status) {
+      where.status = filters.status;
+    }
+    if (filters?.dateFrom || filters?.dateTo) {
+      where.teachingDate = {};
+      if (filters?.dateFrom) {
+        where.teachingDate.gte = new Date(filters.dateFrom + 'T00:00:00');
+      }
+      if (filters?.dateTo) {
+        where.teachingDate.lte = new Date(filters.dateTo + 'T23:59:59');
+      }
+    }
+
+    if (filters?.search && filters.search.trim()) {
+      const q = filters.search.trim();
+      where.AND = [
+        {
+          OR: [
+            { title: { contains: q, mode: 'insensitive' } },
+            { topic: { contains: q, mode: 'insensitive' } },
+            { subjectName: { contains: q, mode: 'insensitive' } },
+            { gradeName: { contains: q, mode: 'insensitive' } },
+            { classroom: { name: { contains: q, mode: 'insensitive' } } },
+            { subject: { name: { contains: q, mode: 'insensitive' } } },
+          ],
+        },
       ];
     }
 
@@ -35,22 +84,29 @@ export class LessonPlansService {
       where,
       include: {
         activities: {
+          select: { id: true, phase: true, title: true, durationMinutes: true, sortOrder: true },
           orderBy: { sortOrder: 'asc' },
         },
         classroom: true,
         subject: true,
-        teachingAssignment: {
-          include: {
-            subject: true,
-            classroom: { include: { grade: true } },
-            schoolYear: true,
+        schedules: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            title: true,
+            plannedDate: true,
+            startTime: true,
+            endTime: true,
+            status: true,
+            classroom: { select: { id: true, name: true } },
           },
+          orderBy: { plannedDate: 'asc' },
         },
       },
       orderBy: { updatedAt: 'desc' },
     });
 
-    return plans.map((p) => this.mapLessonPlan(p));
+    return plans.map((p) => this.mapLessonPlanSummary(p));
   }
 
   async findOne(id: string, teacherId?: string) {
@@ -69,6 +125,19 @@ export class LessonPlansService {
             schoolYear: true,
           },
         },
+        schedules: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            title: true,
+            plannedDate: true,
+            startTime: true,
+            endTime: true,
+            status: true,
+            classroom: { select: { id: true, name: true } },
+          },
+          orderBy: { plannedDate: 'asc' },
+        },
         resources: {
           where: { resource: { deletedAt: null } },
           include: {
@@ -80,6 +149,17 @@ export class LessonPlansService {
             },
           },
           orderBy: { createdAt: 'desc' },
+        },
+        versions: {
+          select: {
+            id: true,
+            versionNumber: true,
+            title: true,
+            changeSummary: true,
+            createdAt: true,
+          },
+          orderBy: { versionNumber: 'desc' },
+          take: 10,
         },
       },
     });
@@ -93,7 +173,7 @@ export class LessonPlansService {
       throw new ForbiddenException('Bạn không có quyền truy cập giáo án này');
     }
 
-    return this.mapLessonPlan(plan);
+    return this.mapLessonPlanDetail(plan);
   }
 
   async create(dto: CreateLessonPlanDto, teacherId: string) {
@@ -126,7 +206,17 @@ export class LessonPlansService {
         effectiveSubjectName = asg.subject?.name || effectiveSubjectName;
         effectiveGradeName = asg.classroom?.grade?.name || asg.classroom?.name || effectiveGradeName;
       } catch (err) {
-        // Fallback for standalone mock/unit contexts
+        // Standalone fallback
+      }
+    }
+
+    // Verify schedule ownership if scheduleId is supplied
+    if (dto.scheduleId) {
+      const sched = await this.prisma.schedule.findUnique({
+        where: { id: dto.scheduleId },
+      });
+      if (!sched || sched.deletedAt || sched.teacherId !== teacherId) {
+        throw new ForbiddenException('Lịch dạy không tồn tại hoặc không thuộc quyền sở hữu của bạn');
       }
     }
 
@@ -135,16 +225,23 @@ export class LessonPlansService {
         data: {
           teacherId,
           teachingAssignmentId: assignmentId,
-          title: dto.title,
+          title: dto.title.trim(),
+          topic: dto.topic?.trim() || null,
           subjectName: effectiveSubjectName,
           gradeName: effectiveGradeName,
           teachingDate: dto.date ? new Date(dto.date) : new Date(),
           durationMinutes: dto.duration || 40,
           objectives: dto.objective || '',
+          specificCompetencies: dto.specificCompetencies || null,
+          generalCompetencies: dto.generalCompetencies || null,
+          qualities: dto.qualities || null,
+          teachingEquipment: dto.teachingEquipment || null,
+          postLessonAdjustment: dto.postLessonAdjustment || null,
+          notes: dto.notes || null,
           classroomId: effectiveClassroomId,
           subjectId: effectiveSubjectId,
           lessonId: dto.lessonId,
-          status: 'DRAFT',
+          status: (dto.status as any) || 'DRAFT',
           version: 1,
         },
       });
@@ -162,6 +259,7 @@ export class LessonPlansService {
                 technique: act.technique || '',
                 competencies: act.competencies || '',
                 qualities: act.qualities || '',
+                equipment: act.equipment || null,
                 objective: act.objective || '',
                 teacherActivity: act.teacher || '',
                 studentActivity: act.students || '',
@@ -172,23 +270,52 @@ export class LessonPlansService {
         );
       }
 
-      const created = await tx.lessonPlan.findUnique({
+      // Link schedule if scheduleId was given
+      if (dto.scheduleId) {
+        await tx.schedule.update({
+          where: { id: dto.scheduleId },
+          data: { lessonPlanId: plan.id },
+        });
+      }
+
+      // Create initial version snapshot
+      const createdWithActivities = await tx.lessonPlan.findUnique({
+        where: { id: plan.id },
+        include: { activities: { orderBy: { sortOrder: 'asc' } } },
+      });
+
+      await tx.lessonPlanVersion.create({
+        data: {
+          lessonPlanId: plan.id,
+          versionNumber: 1,
+          title: plan.title,
+          contentSnapshot: JSON.stringify(this.mapLessonPlanDetail(createdWithActivities)),
+          changeSummary: 'Khởi tạo giáo án ban đầu',
+          createdById: teacherId,
+        },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'LESSON_PLAN_CREATE',
+        resourceType: 'LessonPlan',
+        resourceId: plan.id,
+        details: { title: plan.title, subject: effectiveSubjectName, grade: effectiveGradeName },
+      });
+
+      const fullCreated = await tx.lessonPlan.findUnique({
         where: { id: plan.id },
         include: {
           activities: { orderBy: { sortOrder: 'asc' } },
           classroom: true,
           subject: true,
-          teachingAssignment: {
-            include: {
-              subject: true,
-              classroom: { include: { grade: true } },
-              schoolYear: true,
-            },
-          },
+          schedules: { select: { id: true, plannedDate: true, startTime: true, endTime: true, status: true } },
+          resources: { include: { resource: true } },
+          versions: true,
         },
       });
 
-      return this.mapLessonPlan(created);
+      return this.mapLessonPlanDetail(fullCreated);
     });
   }
 
@@ -210,23 +337,32 @@ export class LessonPlansService {
     // Optimistic Concurrency Control
     if (dto.version !== undefined && dto.version !== existing.version) {
       throw new ConflictException(
-        'Giáo án đã được cập nhật bởi một phiên làm việc khác. Vui lòng tải lại trang.',
+        'Giáo án đã được cập nhật bởi một phiên làm việc khác hoặc thiết bị khác. Vui lòng tải lại dữ liệu mới nhất.',
       );
     }
 
     return this.prisma.$transaction(async (tx) => {
+      const nextVersion = existing.version + 1;
       const data: any = {
-        version: existing.version + 1,
+        version: nextVersion,
       };
 
-      if (dto.title) data.title = dto.title;
+      if (dto.title) data.title = dto.title.trim();
+      if (dto.topic !== undefined) data.topic = dto.topic ? dto.topic.trim() : null;
       if (dto.subject) data.subjectName = dto.subject;
       if (dto.grade) data.gradeName = dto.grade;
       if (dto.date) data.teachingDate = new Date(dto.date);
       if (dto.duration) data.durationMinutes = dto.duration;
       if (dto.objective !== undefined) data.objectives = dto.objective;
+      if (dto.specificCompetencies !== undefined) data.specificCompetencies = dto.specificCompetencies;
+      if (dto.generalCompetencies !== undefined) data.generalCompetencies = dto.generalCompetencies;
+      if (dto.qualities !== undefined) data.qualities = dto.qualities;
+      if (dto.teachingEquipment !== undefined) data.teachingEquipment = dto.teachingEquipment;
+      if (dto.postLessonAdjustment !== undefined) data.postLessonAdjustment = dto.postLessonAdjustment;
+      if (dto.notes !== undefined) data.notes = dto.notes;
+      if (dto.status) data.status = dto.status;
 
-      const updated = await tx.lessonPlan.update({
+      await tx.lessonPlan.update({
         where: { id, version: existing.version },
         data,
       });
@@ -249,6 +385,7 @@ export class LessonPlansService {
                 technique: act.technique || '',
                 competencies: act.competencies || '',
                 qualities: act.qualities || '',
+                equipment: act.equipment || null,
                 objective: act.objective || '',
                 teacherActivity: act.teacher || '',
                 studentActivity: act.students || '',
@@ -265,37 +402,89 @@ export class LessonPlansService {
           activities: { orderBy: { sortOrder: 'asc' } },
           classroom: true,
           subject: true,
+          schedules: { select: { id: true, plannedDate: true, startTime: true, endTime: true, status: true } },
+          resources: { include: { resource: true } },
+          versions: {
+            select: { id: true, versionNumber: true, title: true, changeSummary: true, createdAt: true },
+            orderBy: { versionNumber: 'desc' },
+            take: 10,
+          },
         },
       });
 
-      return this.mapLessonPlan(refreshed);
+      // Save version snapshot on completion or milestone save
+      if (dto.status === 'COMPLETED' || nextVersion % 5 === 0) {
+        await tx.lessonPlanVersion.create({
+          data: {
+            lessonPlanId: id,
+            versionNumber: nextVersion,
+            title: refreshed!.title,
+            contentSnapshot: JSON.stringify(this.mapLessonPlanDetail(refreshed)),
+            changeSummary: dto.status === 'COMPLETED' ? 'Hoàn thành giáo án' : `Cập nhật phiên bản v${nextVersion}`,
+            createdById: teacherId,
+          },
+        });
+      }
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: dto.status === 'COMPLETED' ? 'LESSON_PLAN_COMPLETE' : 'LESSON_PLAN_UPDATE',
+        resourceType: 'LessonPlan',
+        resourceId: id,
+        details: { version: nextVersion, title: refreshed!.title },
+      });
+
+      return this.mapLessonPlanDetail(refreshed);
     });
   }
 
   async remove(id: string, teacherId: string) {
     await this.findOne(id, teacherId);
 
-    await this.prisma.lessonPlan.update({
-      where: { id },
-      data: { deletedAt: new Date() },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      // Unlink any linked schedules gracefully
+      await tx.schedule.updateMany({
+        where: { lessonPlanId: id },
+        data: { lessonPlanId: null },
+      });
 
-    return { success: true, message: 'Đã xóa giáo án' };
+      await tx.lessonPlan.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'LESSON_PLAN_DELETE',
+        resourceType: 'LessonPlan',
+        resourceId: id,
+      });
+
+      return { success: true, message: 'Đã xóa giáo án thành công' };
+    });
   }
 
-  async duplicate(id: string, teacherId: string) {
+  async duplicate(id: string, teacherId: string, customOptions?: { classroomId?: string; date?: string; title?: string }) {
     const original = await this.findOne(id, teacherId);
 
     return this.prisma.$transaction(async (tx) => {
       const copy = await tx.lessonPlan.create({
         data: {
           teacherId,
-          title: `${original.title} (Bản sao)`,
+          title: customOptions?.title?.trim() || `${original.title} (Bản sao)`,
+          topic: original.topic,
           subjectName: original.subject,
           gradeName: original.grade,
-          teachingDate: new Date(),
+          teachingDate: customOptions?.date ? new Date(customOptions.date) : new Date(),
           durationMinutes: original.duration,
           objectives: original.objective,
+          specificCompetencies: original.specificCompetencies,
+          generalCompetencies: original.generalCompetencies,
+          qualities: original.qualities,
+          teachingEquipment: original.teachingEquipment,
+          postLessonAdjustment: null,
+          notes: original.notes,
+          classroomId: customOptions?.classroomId || null,
           status: 'DRAFT',
           version: 1,
         },
@@ -314,6 +503,7 @@ export class LessonPlansService {
                 technique: act.technique,
                 competencies: act.competencies,
                 qualities: act.qualities,
+                equipment: act.equipment || null,
                 objective: act.objective,
                 teacherActivity: act.teacher,
                 studentActivity: act.students,
@@ -333,7 +523,26 @@ export class LessonPlansService {
         },
       });
 
-      return this.mapLessonPlan(refreshed);
+      await tx.lessonPlanVersion.create({
+        data: {
+          lessonPlanId: copy.id,
+          versionNumber: 1,
+          title: copy.title,
+          contentSnapshot: JSON.stringify(this.mapLessonPlanDetail(refreshed)),
+          changeSummary: `Nhân bản từ giáo án ${original.title}`,
+          createdById: teacherId,
+        },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'LESSON_PLAN_DUPLICATE',
+        resourceType: 'LessonPlan',
+        resourceId: copy.id,
+        details: { originalId: id, newTitle: copy.title },
+      });
+
+      return this.mapLessonPlanDetail(refreshed);
     });
   }
 
@@ -354,6 +563,7 @@ export class LessonPlansService {
         technique: dto.technique || '',
         competencies: dto.competencies || '',
         qualities: dto.qualities || '',
+        equipment: dto.equipment || null,
         objective: dto.objective || '',
         teacherActivity: dto.teacher || '',
         studentActivity: dto.students || '',
@@ -390,6 +600,7 @@ export class LessonPlansService {
         technique: dto.technique,
         competencies: dto.competencies,
         qualities: dto.qualities,
+        equipment: (dto as any).equipment,
         objective: dto.objective,
         teacherActivity: dto.teacher,
         studentActivity: dto.students,
@@ -437,9 +648,188 @@ export class LessonPlansService {
     return this.findOne(lessonPlanId, teacherId);
   }
 
-  /**
-   * Attach a resource to a lesson plan (prevents duplicate link)
-   */
+  async saveActivityToLibrary(
+    lessonPlanId: string,
+    activityId: string,
+    dto: SaveActivityToLibraryDto,
+    teacherId: string,
+  ) {
+    await this.findOne(lessonPlanId, teacherId);
+
+    const activity = await this.prisma.lessonPlanActivity.findUnique({
+      where: { id: activityId },
+    });
+
+    if (!activity || activity.lessonPlanId !== lessonPlanId) {
+      throw new NotFoundException('Không tìm thấy hoạt động');
+    }
+
+    const description =
+      dto.description ||
+      `Mục tiêu: ${activity.objective || ''}\nHoạt động GV: ${activity.teacherActivity || ''}\nHoạt động HS: ${activity.studentActivity || ''}`;
+
+    const saved = await this.prisma.teachingActivity.create({
+      data: {
+        teacherId,
+        title: dto.title || activity.title,
+        description,
+        typeName: dto.typeName || activity.phase || 'Khác',
+        subjectName: dto.subject || 'Toán',
+        gradeName: dto.grade || 'Lớp 4',
+        durationMinutes: dto.durationMinutes || activity.durationMinutes,
+        icon: dto.icon || 'Grid2X2',
+        isPublic: false,
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Đã lưu hoạt động vào thư viện cá nhân thành công',
+      activity: saved,
+    };
+  }
+
+  async getVersions(lessonPlanId: string, teacherId: string) {
+    await this.findOne(lessonPlanId, teacherId);
+
+    const versions = await this.prisma.lessonPlanVersion.findMany({
+      where: { lessonPlanId },
+      orderBy: { versionNumber: 'desc' },
+      select: {
+        id: true,
+        versionNumber: true,
+        title: true,
+        changeSummary: true,
+        createdAt: true,
+      },
+    });
+
+    return versions;
+  }
+
+  async restoreVersion(lessonPlanId: string, versionId: string, teacherId: string) {
+    const existing = await this.findOne(lessonPlanId, teacherId);
+
+    const versionRecord = await this.prisma.lessonPlanVersion.findUnique({
+      where: { id: versionId },
+    });
+
+    if (!versionRecord || versionRecord.lessonPlanId !== lessonPlanId) {
+      throw new NotFoundException('Không tìm thấy phiên bản giáo án');
+    }
+
+    const snapshot = JSON.parse(versionRecord.contentSnapshot);
+
+    return this.prisma.$transaction(async (tx) => {
+      const nextVersion = existing.version + 1;
+
+      await tx.lessonPlan.update({
+        where: { id: lessonPlanId },
+        data: {
+          title: snapshot.title || existing.title,
+          topic: snapshot.topic || existing.topic,
+          durationMinutes: snapshot.duration || existing.duration,
+          objectives: snapshot.objective || existing.objective,
+          specificCompetencies: snapshot.specificCompetencies,
+          generalCompetencies: snapshot.generalCompetencies,
+          qualities: snapshot.qualities,
+          teachingEquipment: snapshot.teachingEquipment,
+          postLessonAdjustment: snapshot.postLessonAdjustment,
+          notes: snapshot.notes,
+          version: nextVersion,
+        },
+      });
+
+      if (snapshot.activities && Array.isArray(snapshot.activities)) {
+        await tx.lessonPlanActivity.deleteMany({
+          where: { lessonPlanId },
+        });
+
+        await Promise.all(
+          snapshot.activities.map((act: any, index: number) =>
+            tx.lessonPlanActivity.create({
+              data: {
+                lessonPlanId,
+                phase: act.phase || 'Hoạt động',
+                title: act.title,
+                durationMinutes: act.minutes || 5,
+                method: act.method || '',
+                technique: act.technique || '',
+                competencies: act.competencies || '',
+                qualities: act.qualities || '',
+                equipment: act.equipment || null,
+                objective: act.objective || '',
+                teacherActivity: act.teacher || '',
+                studentActivity: act.students || '',
+                sortOrder: index,
+              },
+            }),
+          ),
+        );
+      }
+
+      // Record restoration snapshot
+      await tx.lessonPlanVersion.create({
+        data: {
+          lessonPlanId,
+          versionNumber: nextVersion,
+          title: snapshot.title || existing.title,
+          contentSnapshot: versionRecord.contentSnapshot,
+          changeSummary: `Khôi phục từ phiên bản v${versionRecord.versionNumber}`,
+          createdById: teacherId,
+        },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'LESSON_PLAN_RESTORE',
+        resourceType: 'LessonPlan',
+        resourceId: lessonPlanId,
+        details: { restoredFromVersion: versionRecord.versionNumber, newVersion: nextVersion },
+      });
+
+      return this.findOne(lessonPlanId, teacherId);
+    });
+  }
+
+  async linkSchedule(lessonPlanId: string, scheduleId: string, teacherId: string) {
+    await this.findOne(lessonPlanId, teacherId);
+
+    const sched = await this.prisma.schedule.findUnique({
+      where: { id: scheduleId },
+    });
+
+    if (!sched || sched.deletedAt || sched.teacherId !== teacherId) {
+      throw new ForbiddenException('Lịch dạy không tồn tại hoặc không thuộc quyền sở hữu của bạn');
+    }
+
+    await this.prisma.schedule.update({
+      where: { id: scheduleId },
+      data: { lessonPlanId },
+    });
+
+    return this.findOne(lessonPlanId, teacherId);
+  }
+
+  async unlinkSchedule(lessonPlanId: string, scheduleId: string, teacherId: string) {
+    await this.findOne(lessonPlanId, teacherId);
+
+    const sched = await this.prisma.schedule.findUnique({
+      where: { id: scheduleId },
+    });
+
+    if (!sched || sched.deletedAt || sched.teacherId !== teacherId) {
+      throw new ForbiddenException('Lịch dạy không tồn tại hoặc không thuộc quyền sở hữu của bạn');
+    }
+
+    await this.prisma.schedule.update({
+      where: { id: scheduleId },
+      data: { lessonPlanId: null },
+    });
+
+    return this.findOne(lessonPlanId, teacherId);
+  }
+
   async attachResource(lessonPlanId: string, resourceId: string, teacherId?: string) {
     await this.findOne(lessonPlanId, teacherId);
 
@@ -455,7 +845,6 @@ export class LessonPlansService {
       throw new ForbiddenException('Bạn không có quyền sử dụng tài nguyên này');
     }
 
-    // Upsert to ensure no duplicate link error
     const link = await this.prisma.lessonPlanResource.upsert({
       where: {
         lessonPlanId_resourceId: {
@@ -481,9 +870,6 @@ export class LessonPlansService {
     return this.mapAttachedResource(link.resource);
   }
 
-  /**
-   * Detach a resource from a lesson plan
-   */
   async detachResource(lessonPlanId: string, resourceId: string, teacherId?: string) {
     await this.findOne(lessonPlanId, teacherId);
 
@@ -497,9 +883,6 @@ export class LessonPlansService {
     return { success: true, message: 'Đã gỡ tài nguyên khỏi giáo án' };
   }
 
-  /**
-   * Get all resources attached to a lesson plan
-   */
   async getAttachedResources(lessonPlanId: string, teacherId?: string) {
     await this.findOne(lessonPlanId, teacherId);
 
@@ -522,21 +905,53 @@ export class LessonPlansService {
     return links.map((l) => this.mapAttachedResource(l.resource));
   }
 
-  private mapLessonPlan(plan: any) {
+  private mapLessonPlanSummary(plan: any) {
+    return {
+      id: plan.id,
+      title: plan.title,
+      topic: plan.topic || null,
+      subject: plan.subjectName || plan.subject?.name || 'Toán',
+      grade: plan.gradeName || plan.classroom?.name || 'Lớp 4A',
+      date: plan.teachingDate ? new Date(plan.teachingDate).toISOString().split('T')[0] : null,
+      duration: plan.durationMinutes || 40,
+      status: plan.status || 'DRAFT',
+      version: plan.version || 1,
+      activitiesCount: (plan.activities || []).length,
+      schedulesCount: (plan.schedules || []).length,
+      schedules: plan.schedules || [],
+      updatedAt: plan.updatedAt,
+      createdAt: plan.createdAt,
+    };
+  }
+
+  private mapLessonPlanDetail(plan: any) {
     const activities = (plan.activities || []).map((a: any) => this.mapActivity(a));
     const resources = (plan.resources || []).map((r: any) => this.mapAttachedResource(r.resource));
     return {
       id: plan.id,
       title: plan.title,
+      topic: plan.topic || '',
       subject: plan.subjectName || plan.subject?.name || 'Toán',
       grade: plan.gradeName || plan.classroom?.name || 'Lớp 4A',
+      classroomId: plan.classroomId || null,
+      subjectId: plan.subjectId || null,
       date: plan.teachingDate ? new Date(plan.teachingDate).toISOString().split('T')[0] : '2026-08-21',
       duration: plan.durationMinutes || 40,
       objective: plan.objectives || '',
-      status: plan.status,
-      version: plan.version,
+      specificCompetencies: plan.specificCompetencies || '',
+      generalCompetencies: plan.generalCompetencies || '',
+      qualities: plan.qualities || '',
+      teachingEquipment: plan.teachingEquipment || '',
+      postLessonAdjustment: plan.postLessonAdjustment || '',
+      notes: plan.notes || '',
+      status: plan.status || 'DRAFT',
+      version: plan.version || 1,
       activities,
       resources,
+      schedules: plan.schedules || [],
+      versions: plan.versions || [],
+      updatedAt: plan.updatedAt,
+      createdAt: plan.createdAt,
     };
   }
 
@@ -579,9 +994,11 @@ export class LessonPlansService {
       technique: act.technique || '',
       competencies: act.competencies || '',
       qualities: act.qualities || '',
+      equipment: act.equipment || '',
       objective: act.objective || '',
       teacher: act.teacherActivity || '',
       students: act.studentActivity || '',
+      sortOrder: act.sortOrder || 0,
     };
   }
 }

@@ -438,6 +438,7 @@ model LessonPlan {
   teachingAssignmentId String?
   lessonId             String?
   title                String
+  topic                String?
   subjectName          String?
   gradeName            String?
   weekNumber           Int?             @default(1)
@@ -445,8 +446,12 @@ model LessonPlan {
   teachingDate         DateTime?
   durationMinutes      Int              @default(40)
   objectives           String?          @db.Text
+  specificCompetencies String?          @db.Text
+  generalCompetencies  String?          @db.Text
+  qualities            String?          @db.Text
   teachingEquipment    String?          @db.Text
   postLessonAdjustment String?          @db.Text
+  notes                String?          @db.Text
   status               LessonPlanStatus @default(DRAFT)
   version              Int              @default(1)
   deletedAt            DateTime?
@@ -461,8 +466,12 @@ model LessonPlan {
   activities         LessonPlanActivity[]
   resources          LessonPlanResource[]
   schedules          Schedule[]
+  versions           LessonPlanVersion[]
 
   @@index([teachingAssignmentId])
+  @@index([teacherId, deletedAt])
+  @@index([classroomId])
+  @@index([subjectId])
 }
 
 model LessonPlanActivity {
@@ -477,6 +486,7 @@ model LessonPlanActivity {
   technique       String?
   competencies    String?
   qualities       String?
+  equipment       String?
   teacherActivity String?      @db.Text
   studentActivity String?      @db.Text
   sortOrder       Int          @default(0)
@@ -484,6 +494,21 @@ model LessonPlanActivity {
   updatedAt       DateTime     @updatedAt
 
   lessonPlan LessonPlan @relation(fields: [lessonPlanId], references: [id], onDelete: Cascade)
+}
+
+model LessonPlanVersion {
+  id              String   @id @default(uuid())
+  lessonPlanId    String
+  versionNumber   Int
+  title           String
+  contentSnapshot String   @db.Text
+  changeSummary   String?
+  createdById     String?
+  createdAt       DateTime @default(now())
+
+  lessonPlan LessonPlan @relation(fields: [lessonPlanId], references: [id], onDelete: Cascade)
+
+  @@index([lessonPlanId, versionNumber])
 }
 
 model TeachingActivity {
