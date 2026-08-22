@@ -57,14 +57,17 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   // 7. CORS Configuration (Strict origin allowlist in production)
-  const configuredFrontendUrls = (configService.get<string>('FRONTEND_URL') || env.FRONTEND_URL)
+  const rawFrontendUrls = configService.get<string>('FRONTEND_URL') || env.FRONTEND_URL || '';
+  const configuredFrontendUrls = rawFrontendUrls
     .split(',')
-    .map((url) => url.trim().replace(/\/$/, ''))
+    .map((url) => url.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 
-  const allowedOrigins = isProd
-    ? configuredFrontendUrls
-    : Array.from(new Set([...configuredFrontendUrls, 'http://localhost:3000', 'http://127.0.0.1:3000']));
+  const defaultOrigins = isProd
+    ? ['https://teachflow-fontend.onrender.com']
+    : ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://teachflow-fontend.onrender.com'];
+
+  const allowedOrigins = Array.from(new Set([...defaultOrigins, ...configuredFrontendUrls]));
 
   app.enableCors({
     origin: (origin, callback) => {
@@ -72,10 +75,11 @@ async function bootstrap() {
       if (!origin) {
         return callback(null, true);
       }
-      const normalizedOrigin = origin.replace(/\/$/, '');
+      const normalizedOrigin = origin.replace(/\/+$/, '');
       if (allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
+      logger.warn(`CORS rejected origin: "${origin}". Allowed origins: ${JSON.stringify(allowedOrigins)}`);
       return callback(new Error(`CORS Error: Origin ${origin} is not allowed by CORS policy`), false);
     },
     credentials: true,

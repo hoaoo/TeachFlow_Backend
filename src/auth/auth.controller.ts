@@ -20,6 +20,27 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
+function getRefreshTokenCookieOptions() {
+  const isProd = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProd, // Must be true when sameSite is 'none' in production HTTPS
+    sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  };
+}
+
+function getClearRefreshTokenCookieOptions() {
+  const isProd = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+    path: '/',
+  };
+}
+
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -38,13 +59,7 @@ export class AuthController {
     const result = await this.authService.login(loginDto);
 
     // Set HTTP-only cookie for secure refresh token
-    response.cookie('refreshToken', result.tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/api/auth/refresh',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    response.cookie('refreshToken', result.tokens.refreshToken, getRefreshTokenCookieOptions());
 
     return {
       ...result,
@@ -62,7 +77,7 @@ export class AuthController {
     @Body() refreshDto: RefreshTokenDto,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const token = refreshDto.refreshToken || request.cookies?.refreshToken;
+    const token = refreshDto?.refreshToken || request.cookies?.refreshToken;
     if (!token) {
       throw new UnauthorizedException('Không tìm thấy refresh token');
     }
@@ -75,20 +90,17 @@ export class AuthController {
       const userId = decoded.sub;
       const tokens = await this.authService.refreshToken(userId, token);
 
-      response.cookie('refreshToken', tokens.refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/api/auth/refresh',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      response.cookie('refreshToken', tokens.refreshToken, getRefreshTokenCookieOptions());
 
       return {
         ...tokens,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
       };
-    } catch {
+    } catch (err: any) {
+      if (err instanceof UnauthorizedException) {
+        throw err;
+      }
       throw new UnauthorizedException('Refresh token không hợp lệ');
     }
   }
@@ -101,7 +113,7 @@ export class AuthController {
     @CurrentUser('userId') userId: string,
     @Res({ passthrough: true }) response: Response,
   ) {
-    response.clearCookie('refreshToken', { path: '/api/auth/refresh' });
+    response.clearCookie('refreshToken', getClearRefreshTokenCookieOptions());
     return this.authService.logout(userId);
   }
 

@@ -33,7 +33,7 @@ export function validateEnvironment(): ValidatedEnvironment {
 
   const port = parseInt(process.env.PORT || '3001', 10);
   const databaseUrl = process.env.DATABASE_URL || '';
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL || (isProd ? 'https://teachflow-fontend.onrender.com' : 'http://localhost:3000');
   const accessSecret = process.env.JWT_ACCESS_SECRET || '';
   const refreshSecret = process.env.JWT_REFRESH_SECRET || '';
 
