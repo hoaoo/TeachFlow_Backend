@@ -193,4 +193,47 @@ describe('DashboardService', () => {
       expect(result.featuredStudents).toEqual([]);
     });
   });
+
+  describe('getDashboardSchedule', () => {
+    it('should query schedules by specific date and format lessons', async () => {
+      mockPrismaService.schedule.findMany.mockResolvedValue([
+        {
+          id: 'sch-1',
+          title: 'Tiết 1: Toán',
+          startTime: '07:00',
+          endTime: '07:45',
+          status: 'PLANNED',
+          isManualStatus: false,
+          plannedDate: new Date('2026-08-24T00:00:00+07:00'),
+          room: 'P.101',
+          subject: { name: 'Toán học' },
+          classroom: { name: '4A', grade: { name: 'Khối 4' } },
+        },
+      ]);
+
+      const result = await service.getDashboardSchedule(
+        { userId: 'u-1', teacherId: 't-1', email: 'teacher@test.com', role: 'TEACHER' },
+        { date: '2026-08-24' },
+      );
+
+      expect(mockPrismaService.schedule.findMany).toHaveBeenCalled();
+      expect(result).toHaveLength(1);
+      expect(result[0].title).toBe('Tiết 1: Toán');
+      expect(result[0].time).toBe('07:00 - 07:45');
+      expect(result[0].subject).toBe('Toán học');
+      expect(result[0].className).toBe('4A');
+    });
+
+    it('should query schedules by date range from and to', async () => {
+      mockPrismaService.schedule.findMany.mockResolvedValue([]);
+
+      const result = await service.getDashboardSchedule(
+        { userId: 'u-1', teacherId: 't-1', email: 'teacher@test.com', role: 'TEACHER' },
+        { from: '2026-08-17', to: '2026-08-23' },
+      );
+
+      expect(mockPrismaService.schedule.findMany).toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+  });
 });

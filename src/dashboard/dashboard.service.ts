@@ -340,4 +340,67 @@ export class DashboardService {
       attendanceRate,
     };
   }
+
+  async getDashboardSchedule(
+    user: AuthenticatedUser,
+    query: { date?: string; from?: string; to?: string },
+  ) {
+    let teacherId = user.teacherId;
+    if (!teacherId && user.userId) {
+      const teacher = await this.prisma.teacher.findUnique({
+        where: { userId: user.userId },
+        select: { id: true },
+      });
+      if (teacher) teacherId = teacher.id;
+    }
+
+    if (!teacherId) return [];
+
+    let start: Date;
+    let end: Date;
+
+    if (query.date) {
+      start = new Date(`${query.date}T00:00:00.000+07:00`);
+      end = new Date(`${query.date}T23:59:59.999+07:00`);
+    } else if (query.from && query.to) {
+      start = new Date(`${query.from}T00:00:00.000+07:00`);
+      end = new Date(`${query.to}T23:59:59.999+07:00`);
+    } else {
+      const { startOfDayUTC, endOfDayUTC } = getTodayVNRange();
+      start = startOfDayUTC;
+      end = endOfDayUTC;
+    }
+
+    const schedules = await this.prisma.schedule.findMany({
+      where: {
+        teacherId,
+        deletedAt: null,
+        plannedDate: { gte: start, lte: end },
+      },
+      include: {
+        classroom: { include: { grade: true } },
+        subject: true,
+      },
+      orderBy: [
+        { plannedDate: 'asc' },
+        { startTime: 'asc' },
+      ],
+    });
+
+    return schedules.map((s, i) => ({
+      id: s.id,
+      time: s.startTime && s.endTime ? `${s.startTime} - ${s.endTime}` : s.startTime || '07:30',
+      startTime: s.startTime || '07:00',
+      endTime: s.endTime || '07:45',
+      plannedDate: s.plannedDate ? s.plannedDate.toISOString().split('T')[0] : null,
+      status: s.status || 'PLANNED',
+      isManualStatus: Boolean(s.isManualStatus),
+      subject: s.subject?.name || 'Môn học',
+      title: s.title || `Tiết học ${i + 1}`,
+      className: s.classroom?.name || 'Lớp',
+      gradeName: s.classroom?.grade?.name || null,
+      room: s.room || s.classroom?.room || 'Phòng học',
+      color: i % 3 === 0 ? 'teal' : i % 3 === 1 ? 'orange' : 'blue',
+    }));
+  }
 }
