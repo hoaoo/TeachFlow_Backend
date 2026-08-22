@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { StudentsService } from './students.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 
 describe('StudentsService (Production Unit Tests)', () => {
@@ -156,6 +157,7 @@ describe('StudentsService (Production Unit Tests)', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StudentsService,
+        TeachingAssignmentAuthorizationService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: AuditService, useValue: mockAudit },
       ],
@@ -264,6 +266,88 @@ describe('StudentsService (Production Unit Tests)', () => {
       expect(res.items).toHaveLength(1);
       expect(res.totalItems).toBe(1);
       expect(res.items[0].id).toBe('student-1');
+    });
+
+    it('queries Student through ACTIVE StudentEnrollment in the accessible classroom scope', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([mockClass1G]);
+      mockPrisma.student.count.mockResolvedValue(1);
+      mockPrisma.student.findMany
+        .mockResolvedValueOnce([mockStudent1])
+        .mockResolvedValueOnce([{ id: 'student-1', status: 'EXCELLENT', studentAttendances: [] }]);
+
+      await service.findAll({}, 'teacher-a');
+
+      expect(mockPrisma.classroom.findMany).toHaveBeenCalledWith({
+        where: {
+          deletedAt: null,
+          OR: [
+            { teacherId: 'teacher-a' },
+            { teachingAssignments: { some: { teacherId: 'teacher-a', isActive: true } } },
+          ],
+        },
+        select: { id: true },
+      });
+
+      const studentWhere = mockPrisma.student.count.mock.calls[0][0].where;
+      expect(studentWhere.AND).toEqual(expect.arrayContaining([
+        {
+          studentEnrollments: {
+            some: expect.objectContaining({
+              status: 'ACTIVE',
+              classroomId: { in: ['class-1g'] },
+            }),
+          },
+        },
+      ]));
+      expect(JSON.stringify(studentWhere)).not.toContain('classStudents');
+    });
+
+    it('keeps classroom, grade and status filters inside the teacher enrollment scope', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([mockClass1G, mockClass1A]);
+      mockPrisma.student.count.mockResolvedValue(1);
+      mockPrisma.student.findMany
+        .mockResolvedValueOnce([mockStudent1])
+        .mockResolvedValueOnce([{ id: 'student-1', status: 'EXCELLENT', studentAttendances: [] }]);
+
+      await service.findAll(
+        { classId: 'class-1g', gradeId: 'grade-1', status: 'EXCELLENT' },
+        'teacher-a',
+      );
+
+      const studentWhere = mockPrisma.student.count.mock.calls[0][0].where;
+      expect(studentWhere.AND).toEqual(expect.arrayContaining([
+        { status: 'EXCELLENT' },
+        {
+          studentEnrollments: {
+            some: expect.objectContaining({
+              classroomId: { in: ['class-1g'] },
+              classroom: expect.objectContaining({ gradeId: 'grade-1' }),
+            }),
+          },
+        },
+      ]));
+    });
+
+    it('uses the exact list where for summary so KPI count cannot drift', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([mockClass1G]);
+      mockPrisma.student.count.mockResolvedValue(1);
+      mockPrisma.student.findMany
+        .mockResolvedValueOnce([mockStudent1])
+        .mockResolvedValueOnce([{ id: 'student-1', status: 'EXCELLENT', studentAttendances: [] }]);
+
+      await service.findAll({ gradeId: 'grade-1' }, 'teacher-a');
+
+      const listWhere = mockPrisma.student.count.mock.calls[0][0].where;
+      const summaryWhere = mockPrisma.student.findMany.mock.calls[1][0].where;
+      expect(summaryWhere).toEqual(listWhere);
+    });
+
+    it('does not expose teacher A students to teacher B', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([]);
+      const result = await service.findAll({}, 'teacher-b');
+      expect(result.items).toEqual([]);
+      expect(result.summary.totalStudents).toBe(0);
+      expect(mockPrisma.student.findMany).not.toHaveBeenCalled();
     });
   });
 

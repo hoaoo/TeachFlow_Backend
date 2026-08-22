@@ -12,6 +12,7 @@ import { TransferStudentDto } from './dto/transfer-student.dto';
 import { ImportStudentsDto, ImportStudentRowDto } from './dto/import-students.dto';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { AuditService } from '../common/audit/audit.service';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 
 export interface StudentFilterQuery extends PaginationQueryDto {
   classId?: string;
@@ -25,55 +26,9 @@ export interface StudentFilterQuery extends PaginationQueryDto {
 export class StudentsService {
   constructor(
     private prisma: PrismaService,
+    private classroomAccess: TeachingAssignmentAuthorizationService,
     @Optional() private auditService?: AuditService,
   ) {}
-
-  /**
-   * Helper: Get accessible classroom IDs for a given teacher
-   */
-  private async getTeacherAccessibleClassroomIds(teacherId: string): Promise<string[]> {
-    try {
-      const teacherRecords = this.prisma.teacher?.findMany
-        ? await this.prisma.teacher.findMany({
-            where: {
-              OR: [
-                { id: teacherId },
-                { userId: teacherId },
-              ],
-            },
-            select: { id: true },
-          })
-        : [];
-      const validTeacherIds = Array.from(new Set<string>([teacherId, ...teacherRecords.map((t) => t.id)]));
-
-      const [homeroomClasses, assignedClasses] = await Promise.all([
-        this.prisma.classroom?.findMany
-          ? this.prisma.classroom.findMany({
-              where: { teacherId: { in: validTeacherIds }, deletedAt: null },
-              select: { id: true },
-            })
-          : [],
-        this.prisma.teachingAssignment?.findMany
-          ? this.prisma.teachingAssignment.findMany({
-              where: { teacherId: { in: validTeacherIds }, isActive: true },
-              select: { classroomId: true },
-            })
-          : [],
-      ]);
-
-      const ids = new Set<string>();
-      (homeroomClasses || []).forEach((c: any) => {
-        if (c && c.id) ids.add(c.id);
-      });
-      (assignedClasses || []).forEach((a: any) => {
-        if (a && a.classroomId) ids.add(a.classroomId);
-      });
-
-      return Array.from(ids);
-    } catch {
-      return [];
-    }
-  }
 
   async findAll(query: StudentFilterQuery, teacherId?: string) {
     const {
@@ -91,7 +46,7 @@ export class StudentsService {
     // Anti-IDOR Scope: Teacher must have access to student's classroom
     let teacherClassIds: string[] = [];
     if (teacherId) {
-      teacherClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      teacherClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
       if (teacherClassIds.length === 0) {
         return {
           items: [],
@@ -155,31 +110,9 @@ export class StudentsService {
       enrollmentCondition.classroom.schoolYearId = schoolYearId;
     }
 
-    // Legacy ClassStudent compatibility condition
-    const classStudentCondition: any = {
-      status: 'ACTIVE',
-      classroom: {
-        deletedAt: null,
-      },
-    };
-    if (targetClassIds.length > 0) {
-      classStudentCondition.classroomId = { in: targetClassIds };
-    }
-    if (gradeId && gradeId !== 'ALL' && gradeId !== 'Tất cả') {
-      classStudentCondition.classroom.gradeId = gradeId;
-    }
-    if (schoolYearId && schoolYearId !== 'ALL' && schoolYearId !== 'Tất cả') {
-      classStudentCondition.classroom.schoolYearId = schoolYearId;
-    }
-
     const andConditions: any[] = [
       { deletedAt: null },
-      {
-        OR: [
-          { studentEnrollments: { some: enrollmentCondition } },
-          { classStudents: { some: classStudentCondition } },
-        ],
-      },
+      { studentEnrollments: { some: enrollmentCondition } },
     ];
 
     // Status filter
@@ -219,33 +152,6 @@ export class StudentsService {
       orderBy = { updatedAt: 'desc' };
     }
 
-    // Scope conditions for summary calculation
-    const scopeConditions: any[] = [
-      { deletedAt: null },
-      {
-        OR: [
-          {
-            studentEnrollments: {
-              some: {
-                status: 'ACTIVE',
-                classroom: { deletedAt: null },
-                ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
-              },
-            },
-          },
-          {
-            classStudents: {
-              some: {
-                status: 'ACTIVE',
-                classroom: { deletedAt: null },
-                ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
-              },
-            },
-          },
-        ],
-      },
-    ];
-
     const [totalItems, students, allScopeStudents] = await Promise.all([
       this.prisma.student.count({ where }),
       this.prisma.student.findMany({
@@ -262,19 +168,14 @@ export class StudentsService {
             include: { classroom: { include: { grade: true, schoolYear: true } } },
             orderBy: { enrolledAt: 'desc' },
           },
-          classStudents: {
-            where: {
-              status: 'ACTIVE',
-              classroom: { deletedAt: null },
-              ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
-            },
-            include: { classroom: { include: { grade: true, schoolYear: true } } },
-          },
           comments: {
             orderBy: { commentDate: 'desc' },
             take: 1,
           },
           studentAttendances: {
+            where: {
+              attendanceSession: { classroomId: { in: targetClassIds } },
+            },
             select: { status: true },
           },
         },
@@ -282,11 +183,14 @@ export class StudentsService {
       }),
       // Aggregate summary across current scope
       this.prisma.student.findMany({
-        where: { AND: scopeConditions },
+        where,
         select: {
           id: true,
           status: true,
           studentAttendances: {
+            where: {
+              attendanceSession: { classroomId: { in: targetClassIds } },
+            },
             select: { status: true },
           },
         },
@@ -295,7 +199,9 @@ export class StudentsService {
 
     // Calculate Summary Stats
     const totalStudents = allScopeStudents.length;
-    const activeStudents = allScopeStudents.filter((s) => s.status === 'EXCELLENT' || s.status === 'GOOD').length;
+    // The list scope already requires an ACTIVE StudentEnrollment, so this KPI
+    // represents currently enrolled students rather than academic performance.
+    const activeStudents = totalStudents;
     const needsSupportStudents = allScopeStudents.filter((s) => s.status === 'NEEDS_SUPPORT').length;
 
     let totalRecordedAttendances = 0;
@@ -382,7 +288,7 @@ export class StudentsService {
 
       let hasAccess = isHomeroom;
       if (!hasAccess) {
-        const teacherClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+        const teacherClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
         const studentClassIds = [
           ...(student.classStudents || []).map((cs: any) => cs.classroomId),
           ...(student.studentEnrollments || []).map((se: any) => se.classroomId),
@@ -436,7 +342,7 @@ export class StudentsService {
 
     // Verify teacher permission
     if (teacherId && classroom.teacherId !== teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
       if (!accessibleClassIds.includes(classId)) {
         throw new ForbiddenException('Bạn không có quyền thêm học sinh vào lớp học này');
       }
@@ -640,7 +546,7 @@ export class StudentsService {
     }
 
     if (teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
       if (!accessibleClassIds.includes(dto.targetClassroomId)) {
         throw new ForbiddenException('Bạn không có quyền chuyển học sinh vào lớp học này');
       }
@@ -728,7 +634,7 @@ export class StudentsService {
     }
 
     if (teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
       if (!accessibleClassIds.includes(classroomId)) {
         throw new ForbiddenException('Bạn không có quyền import học sinh vào lớp học này');
       }

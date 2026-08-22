@@ -73,6 +73,9 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
   };
 
   const mockAssignmentAuth = {
+    assertTeacherCanAccessClassroom: jest.fn().mockImplementation(
+      async (_classroomId: string, _teacherId?: string) => mockClassroomA,
+    ),
     assertTeacherCanAccessClassroomAttendance: jest.fn(),
   };
 

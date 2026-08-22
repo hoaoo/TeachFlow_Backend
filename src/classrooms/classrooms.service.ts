@@ -31,34 +31,11 @@ export class ClassroomsService {
    * Helper to verify teacher authorization on classroom
    */
   async assertTeacherAccess(classroomId: string, teacherId?: string, requireHomeroom = false) {
-    if (!teacherId) return; // Admin bypass
-
-    const classroom = await this.prisma.classroom.findUnique({
-      where: { id: classroomId },
-      include: {
-        teachingAssignments: {
-          where: { teacherId, isActive: true },
-        },
-      },
-    });
-
-    if (!classroom || classroom.deletedAt) {
-      throw new NotFoundException(`Không tìm thấy lớp học với mã ${classroomId}`);
-    }
-
-    const isHomeroom = classroom.teacherId === teacherId;
-    if (requireHomeroom && !isHomeroom) {
-      this.logger.warn(`[SECURITY_IDOR] Teacher ${teacherId} attempted owner-only operation on classroom ${classroomId}`);
-      throw new ForbiddenException('Chỉ giáo viên chủ nhiệm mới có quyền thực hiện thao tác này');
-    }
-
-    const hasAssignment = (classroom.teachingAssignments || []).length > 0;
-    if (!isHomeroom && !hasAssignment) {
-      this.logger.warn(`[SECURITY_IDOR] Teacher ${teacherId} denied access to classroom ${classroomId}`);
-      throw new ForbiddenException('Bạn không có quyền truy cập lớp học này');
-    }
-
-    return classroom;
+    return this.assignmentAuth.assertTeacherCanAccessClassroom(
+      classroomId,
+      teacherId,
+      requireHomeroom,
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

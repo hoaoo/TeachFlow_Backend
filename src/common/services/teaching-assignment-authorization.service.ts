@@ -14,6 +14,53 @@ export class TeachingAssignmentAuthorizationService {
 
   constructor(private prisma: PrismaService) {}
 
+  /** Canonical classroom visibility scope for teacher-scoped modules. */
+  buildTeacherClassroomScope(teacherId: string) {
+    return {
+      deletedAt: null,
+      OR: [
+        { teacherId },
+        { teachingAssignments: { some: { teacherId, isActive: true } } },
+      ],
+    };
+  }
+
+  async getAccessibleClassroomIds(teacherId: string): Promise<string[]> {
+    const classrooms = await this.prisma.classroom.findMany({
+      where: this.buildTeacherClassroomScope(teacherId),
+      select: { id: true },
+    });
+    return (classrooms ?? []).map(({ id }) => id);
+  }
+
+  async assertTeacherCanAccessClassroom(
+    classroomId: string,
+    teacherId?: string,
+    requireHomeroom = false,
+  ) {
+    if (!teacherId) return;
+
+    const classroom = await this.prisma.classroom.findUnique({
+      where: { id: classroomId },
+      include: { teachingAssignments: { where: { teacherId, isActive: true } } },
+    });
+
+    if (!classroom || classroom.deletedAt) {
+      throw new NotFoundException(`Không tìm thấy lớp học với mã ${classroomId}`);
+    }
+
+    const isHomeroom = classroom.teacherId === teacherId;
+    if (requireHomeroom && !isHomeroom) {
+      throw new ForbiddenException('Chỉ giáo viên chủ nhiệm mới có quyền thực hiện thao tác này');
+    }
+
+    if (!isHomeroom && classroom.teachingAssignments.length === 0) {
+      throw new ForbiddenException('Bạn không có quyền truy cập lớp học này');
+    }
+
+    return classroom;
+  }
+
   /**
    * Validate and load an active TeachingAssignment for resource creation.
    * Ensures the assignment exists, is active, and belongs to the current teacher (unless admin).
