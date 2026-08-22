@@ -529,9 +529,20 @@ model TeachingActivity {
   subjectId       String?
   subjectName     String?
   durationMinutes Int          @default(10)
+  objective       String?      @db.Text
+  method          String?
+  technique       String?
+  competencies    String?
+  qualities       String?
+  equipment       String?
+  teacherActivity String?      @db.Text
+  studentActivity String?      @db.Text
+  gameRules       String?      @db.Text
+  questionsJson   Json?
   icon            String?      @default("Grid2X2")
   usesCount       Int          @default(0)
   isPublic        Boolean      @default(true)
+  isSystem        Boolean      @default(false)
   deletedAt       DateTime?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -539,6 +550,11 @@ model TeachingActivity {
   teacher Teacher? @relation(fields: [teacherId], references: [id])
   grade   Grade?   @relation(fields: [gradeId], references: [id])
   subject Subject? @relation(fields: [subjectId], references: [id])
+
+  @@index([teacherId, deletedAt])
+  @@index([typeName])
+  @@index([subjectName])
+  @@index([gradeName])
 }
 
 model Worksheet {
