@@ -38,6 +38,30 @@ export class ClassroomsService {
     );
   }
 
+  private async validateSubjectIds(subjectIds?: string[]) {
+    if (subjectIds === undefined) return undefined;
+    const uniqueIds = [...new Set(subjectIds)];
+    if (uniqueIds.length === 0) return uniqueIds;
+    const activeSubjects = await this.prisma.subject.findMany({
+      where: { id: { in: uniqueIds }, isActive: true },
+      select: { id: true },
+    });
+    if (activeSubjects.length !== uniqueIds.length) {
+      throw new BadRequestException('Danh sách môn học chứa môn không tồn tại hoặc đã ngừng hoạt động');
+    }
+    return uniqueIds;
+  }
+
+  async getConfiguredSubjects(classroomId: string, teacherId?: string) {
+    await this.assertTeacherAccess(classroomId, teacherId, true);
+    const configured = await this.prisma.classSubject.findMany({
+      where: { classroomId, isActive: true, subject: { isActive: true } },
+      select: { subject: { select: { id: true, code: true, name: true } } },
+      orderBy: { subject: { sortOrder: 'asc' } },
+    });
+    return configured.map((item) => item.subject);
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // CLASSROOM LIST & OVERVIEW
   // ═══════════════════════════════════════════════════════════════════════════
@@ -258,6 +282,7 @@ export class ClassroomsService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async create(dto: CreateClassroomDto, currentTeacherId?: string) {
+    const subjectIds = await this.validateSubjectIds(dto.subjectIds);
     let schoolYearId = dto.schoolYearId;
     if (!schoolYearId) {
       const currentSy =
@@ -363,6 +388,9 @@ export class ClassroomsService {
           accent: dto.accent || 'teal',
           status: dto.status || 'ACTIVE',
           isActive: dto.isActive !== undefined ? dto.isActive : true,
+          classSubjects: subjectIds
+            ? { create: subjectIds.map((subjectId) => ({ subjectId, isActive: true })) }
+            : undefined,
         },
         include: {
           grade: true,
@@ -370,6 +398,10 @@ export class ClassroomsService {
           teacher: true,
           studentEnrollments: {
             include: { student: true },
+          },
+          classSubjects: {
+            where: { isActive: true },
+            select: { subjectId: true },
           },
         },
       });
@@ -391,6 +423,7 @@ export class ClassroomsService {
   }
 
   async update(id: string, dto: UpdateClassroomDto, teacherId?: string) {
+    const subjectIds = await this.validateSubjectIds(dto.subjectIds);
     const existing = await this.prisma.classroom.findUnique({
       where: { id },
       include: { schoolYear: true, grade: true },
@@ -442,9 +475,9 @@ export class ClassroomsService {
     }
 
     try {
-      const updated = await this.prisma.classroom.update({
-        where: { id },
-        data: {
+      const updateClassroom = (db: any) => db.classroom.update({
+          where: { id },
+          data: {
           code: dto.code ? code : undefined,
           name: dto.name ? dto.name.trim() : undefined,
           gradeId: dto.gradeId,
@@ -454,8 +487,8 @@ export class ClassroomsService {
           accent: dto.accent,
           status: dto.status,
           isActive: dto.isActive,
-        },
-        include: {
+          },
+          include: {
           grade: true,
           schoolYear: true,
           teacher: true,
@@ -468,9 +501,33 @@ export class ClassroomsService {
                 },
               },
             },
+            },
+            classSubjects: {
+              where: { isActive: true },
+              select: { subjectId: true },
+            },
           },
-        },
-      });
+        });
+
+      let updated: any;
+      if (subjectIds !== undefined) {
+        updated = await this.prisma.$transaction(async (tx) => {
+          await tx.classSubject.updateMany({
+            where: { classroomId: id },
+            data: { isActive: false },
+          });
+          for (const subjectId of subjectIds) {
+            await tx.classSubject.upsert({
+              where: { classroomId_subjectId: { classroomId: id, subjectId } },
+              create: { classroomId: id, subjectId, isActive: true },
+              update: { isActive: true },
+            });
+          }
+          return updateClassroom(tx);
+        });
+      } else {
+        updated = await updateClassroom(this.prisma);
+      }
 
       this.auditService?.log({
         action: 'CLASSROOM_UPDATE',
@@ -1460,6 +1517,7 @@ export class ClassroomsService {
 
     return {
       id: cls.id,
+      subjectIds: (cls.classSubjects || []).map((item: any) => item.subjectId),
       code: cls.code || cls.name,
       name: cls.name,
       gradeId: cls.gradeId,

@@ -50,6 +50,16 @@ export class SchedulesController {
     });
   }
 
+  @Get('available-subjects')
+  @ApiOperation({ summary: 'Lấy môn có thể lên lịch theo lớp và teaching mode của giáo viên hiện tại' })
+  @ApiQuery({ name: 'classroomId', required: true })
+  getAvailableSubjects(
+    @Query('classroomId') classroomId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.schedulesService.getAvailableSubjects(classroomId, user.teacherId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Lấy chi tiết một tiết dạy theo lịch' })
   @ApiResponse({ status: 200, description: 'Chi tiết lịch dạy' })

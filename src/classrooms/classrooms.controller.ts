@@ -68,6 +68,15 @@ export class ClassroomsController {
     return this.classroomsService.findOne(id, teacherId);
   }
 
+  @Get(':id/subjects')
+  @ApiOperation({ summary: 'Lấy các môn được cấu hình cho lớp do giáo viên hiện tại làm chủ nhiệm' })
+  async getConfiguredSubjects(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.classroomsService.getConfiguredSubjects(id, user.teacherId);
+  }
+
   @Post()
   @ApiOperation({ summary: 'Tạo lớp học mới' })
   async create(

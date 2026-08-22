@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsBoolean } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, IsString, IsBoolean, IsUUID } from 'class-validator';
 
 export class CreateClassroomDto {
   @ApiProperty({ description: 'Tên lớp học, ví dụ: Lớp 4A1', example: 'Lớp 4A1' })
@@ -56,4 +56,10 @@ export class CreateClassroomDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ type: [String], description: 'Danh sách môn học được cấu hình cho lớp' })
+  @IsOptional()
+  @IsArray()
+  @IsUUID(4, { each: true, message: 'Danh sách môn học chứa ID không hợp lệ' })
+  subjectIds?: string[];
 }

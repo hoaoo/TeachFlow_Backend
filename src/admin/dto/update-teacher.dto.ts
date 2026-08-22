@@ -1,4 +1,5 @@
-import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { TeachingMode } from '@prisma/client';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
@@ -22,4 +23,9 @@ export class UpdateTeacherDto {
   @MaxLength(20, { message: 'Số điện thoại tối đa 20 ký tự' })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   phone?: string;
+
+  @ApiPropertyOptional({ enum: TeachingMode })
+  @IsOptional()
+  @IsEnum(TeachingMode)
+  teachingMode?: TeachingMode;
 }

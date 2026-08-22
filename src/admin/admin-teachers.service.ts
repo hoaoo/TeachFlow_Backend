@@ -25,6 +25,7 @@ export interface TeacherResponse {
   avatarUrl: string | null;
   isActive: boolean;
   role: string;
+  teachingMode: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -131,6 +132,7 @@ export class AdminTeachersService {
           userId: user.id,
           fullName: dto.fullName.trim(),
           phone: dto.phone?.trim() || null,
+          teachingMode: dto.teachingMode,
         },
         include: { user: true },
       });
@@ -211,6 +213,7 @@ export class AdminTeachersService {
         data: {
           fullName: dto.fullName !== undefined ? dto.fullName.trim() : undefined,
           phone: dto.phone !== undefined ? (dto.phone ? dto.phone.trim() : null) : undefined,
+          teachingMode: dto.teachingMode,
         },
         include: { user: true },
       });
@@ -417,6 +420,7 @@ export class AdminTeachersService {
       avatarUrl: t.avatarUrl,
       isActive: t.user?.isActive ?? true,
       role: t.user?.role || 'TEACHER',
+      teachingMode: t.teachingMode,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
     };

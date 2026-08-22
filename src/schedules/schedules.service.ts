@@ -24,6 +24,72 @@ export class SchedulesService {
     @Optional() private notificationsService?: NotificationsService,
   ) {}
 
+  async getAvailableSubjects(classroomId: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Tài khoản hiện tại không có hồ sơ giáo viên');
+    }
+
+    const teacher = await this.prisma.teacher.findUnique({
+      where: { id: teacherId },
+      select: { teachingMode: true },
+    });
+    if (!teacher) {
+      throw new ForbiddenException('Không tìm thấy hồ sơ giáo viên hiện tại');
+    }
+
+    if (teacher.teachingMode === 'PRIMARY_GENERALIST') {
+      const classroom = await this.prisma.classroom.findFirst({
+        where: {
+          id: classroomId,
+          teacherId,
+          deletedAt: null,
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      if (!classroom) return [];
+
+      const configured = await this.prisma.classSubject.findMany({
+        where: {
+          classroomId,
+          isActive: true,
+          subject: { isActive: true },
+        },
+        select: { subject: { select: { id: true, code: true, name: true } } },
+        orderBy: { subject: { sortOrder: 'asc' } },
+      });
+      return configured.map((item) => item.subject);
+    }
+
+    const assignments = await this.prisma.teachingAssignment.findMany({
+      where: {
+        teacherId,
+        classroomId,
+        isActive: true,
+        classroom: { deletedAt: null, isActive: true },
+        subject: { isActive: true },
+      },
+      select: { subject: { select: { id: true, code: true, name: true } } },
+      orderBy: { subject: { sortOrder: 'asc' } },
+    });
+
+    const unique = new Map(assignments.map((item) => [item.subject.id, item.subject]));
+    return [...unique.values()];
+  }
+
+  private async assertSubjectAvailable(
+    classroomId: string,
+    subjectId: string,
+    teacherId: string,
+  ) {
+    const available = await this.getAvailableSubjects(classroomId, teacherId);
+    if (!available.some((subject) => subject.id === subjectId)) {
+      throw new ForbiddenException(
+        'Môn học không được phép lên lịch cho giáo viên và lớp học hiện tại',
+      );
+    }
+  }
+
   /**
    * Helper to check time overlap for a given date, startTime and endTime.
    * Condition: existingStart < newEnd AND existingEnd > newStart
@@ -226,13 +292,14 @@ export class SchedulesService {
   }
 
   async create(dto: CreateScheduleDto, teacherId: string) {
-    // Validate classroom belongs to this teacher
+    // Load the target class, then enforce mode-aware teacher/class/subject ownership.
     const classroom = await this.prisma.classroom.findUnique({
       where: { id: dto.classroomId },
     });
-    if (!classroom || classroom.deletedAt || classroom.teacherId !== teacherId) {
+    if (!classroom || classroom.deletedAt || classroom.isActive === false) {
       throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
     }
+    await this.assertSubjectAvailable(dto.classroomId, dto.subjectId, teacherId);
 
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
 
@@ -660,6 +727,8 @@ export class SchedulesService {
     const targetStartTime = dto.startTime || existing.startTime;
     const targetEndTime = dto.endTime || existing.endTime;
 
+    await this.assertSubjectAvailable(targetClassroomId, targetSubjectId, teacherId);
+
     if (targetStartTime >= targetEndTime) {
       throw new BadRequestException('Giờ bắt đầu phải nhỏ hơn giờ kết thúc');
     }
@@ -668,16 +737,6 @@ export class SchedulesService {
       ? new Date(dto.plannedDate + 'T00:00:00')
       : new Date(existing.plannedDate);
     targetDate.setHours(0, 0, 0, 0);
-
-    // Validate target classroom if changed
-    if (targetClassroomId !== existing.classroomId) {
-      const cls = await this.prisma.classroom.findUnique({
-        where: { id: targetClassroomId },
-      });
-      if (!cls || cls.deletedAt || cls.teacherId !== teacherId) {
-        throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
-      }
-    }
 
     // Check conflict
     await this.checkConflict({

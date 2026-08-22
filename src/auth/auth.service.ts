@@ -158,6 +158,7 @@ export class AuthService {
               fullName: teacher.fullName,
               avatarUrl: teacher.avatarUrl,
               phone: teacher.phone,
+              teachingMode: teacher.teachingMode,
             }
           : null,
       },
@@ -264,6 +265,7 @@ export class AuthService {
             fullName: teacher.fullName,
             avatarUrl: teacher.avatarUrl,
             phone: teacher.phone,
+            teachingMode: teacher.teachingMode,
             classes: (teacher.classrooms || []).map((cls: any) => ({
               id: cls.id,
               name: cls.name,

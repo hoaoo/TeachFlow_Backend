@@ -25,6 +25,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
     teacherId: mockTeacherId,
     schoolYearId: mockSchoolYearId,
     deletedAt: null,
+    isActive: true,
     grade: { name: 'Khối 4' },
   };
 
@@ -54,6 +55,16 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
       }),
       classroom: {
         findUnique: jest.fn().mockResolvedValue(mockClassroom),
+        findFirst: jest.fn().mockResolvedValue(mockClassroom),
+      },
+      teacher: {
+        findUnique: jest.fn().mockResolvedValue({ teachingMode: 'PRIMARY_GENERALIST' }),
+      },
+      classSubject: {
+        findMany: jest.fn().mockResolvedValue([{ subject: mockSubject }]),
+      },
+      teachingAssignment: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
       subject: {
         findUnique: jest.fn().mockResolvedValue(mockSubject),
@@ -288,6 +299,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
         ...mockClassroom,
         teacherId: mockOtherTeacherId,
       });
+      mockPrisma.classroom.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.create(
