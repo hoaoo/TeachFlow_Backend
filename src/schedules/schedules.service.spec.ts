@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { SchedulesService } from './schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateScheduleDto } from './dto/create-schedule.dto';
 
 describe('SchedulesService (Dedicated Schedule Domain)', () => {
   let service: SchedulesService;
@@ -65,6 +68,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
       },
       teachingAssignment: {
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       subject: {
         findUnique: jest.fn().mockResolvedValue(mockSubject),
@@ -128,7 +132,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
       const res = await service.create(
         {
           classroomId: mockClassroomId,
-          subjectId: mockSubjectId,
+          subjectName: 'Toán học',
           title: 'Tiết 1: Ôn tập phân số',
           plannedDate: '2026-08-25',
           startTime: '07:00',
@@ -148,7 +152,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
         service.create(
           {
             classroomId: mockClassroomId,
-            subjectId: mockSubjectId,
+            subjectName: 'Toán học',
             title: 'Tiết 1: Ôn tập phân số',
             plannedDate: '2026-08-25',
             startTime: '08:00',
@@ -176,7 +180,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
         service.create(
           {
             classroomId: mockClassroomId,
-            subjectId: mockSubjectId,
+            subjectName: 'Khoa học',
             title: 'Tiết 2: Khoa học',
             plannedDate: '2026-08-25',
             startTime: '07:30',
@@ -219,7 +223,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
       const result = await service.create(
         {
           classroomId: mockClassroomId,
-          subjectId: mockSubjectId,
+          subjectName: 'Tiếng Việt',
           title: 'Tiết 2: Tiếng Việt',
           plannedDate: '2026-08-25',
           startTime: '07:45',
@@ -276,7 +280,7 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
       const res = await service.create(
         {
           classroomId: mockClassroomId,
-          subjectId: mockSubjectId,
+          subjectName: 'Toán học',
           title: 'Tiết Toán định kỳ',
           plannedDate: '2026-08-24',
           startTime: '07:00',
@@ -299,18 +303,50 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
         ...mockClassroom,
         teacherId: mockOtherTeacherId,
       });
-      mockPrisma.classroom.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.create(
           {
             classroomId: mockClassroomId,
-            subjectId: mockSubjectId,
+            subjectName: 'Toán học',
             title: 'Tiết học',
           },
           mockTeacherId,
         ),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('creates a schedule from a trimmed free-text subject without loading Subject or ClassSubject', async () => {
+      mockPrisma.schedule.findMany.mockResolvedValueOnce([]);
+      mockPrisma.schedule.create.mockImplementationOnce(({ data }: any) => ({
+        id: 'schedule-free-text',
+        ...data,
+        classroom: mockClassroom,
+        subject: null,
+        schoolYear: mockSchoolYear,
+      }));
+
+      const result = await service.create(
+        {
+          classroomId: mockClassroomId,
+          subjectName: '  Hoạt động trải nghiệm  ',
+          title: 'Sinh hoạt chủ đề',
+          plannedDate: '2026-08-25',
+        },
+        mockTeacherId,
+      );
+
+      expect(result.subjectName).toBe('Hoạt động trải nghiệm');
+      expect(mockPrisma.schedule.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subjectId: null,
+            subjectName: 'Hoạt động trải nghiệm',
+          }),
+        }),
+      );
+      expect(mockPrisma.subject.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.classSubject.findMany).not.toHaveBeenCalled();
     });
 
     it('should reject updating schedule owned by another teacher', async () => {
@@ -337,6 +373,99 @@ describe('SchedulesService (Dedicated Schedule Domain)', () => {
       await expect(
         service.findOne('sched-other', mockTeacherId),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('free-text subject name', () => {
+    it('updates and trims subjectName without changing the legacy subjectId', async () => {
+      mockPrisma.schedule.findUnique.mockResolvedValueOnce({
+        id: 'sched-1',
+        teacherId: mockTeacherId,
+        classroomId: mockClassroomId,
+        subjectId: mockSubjectId,
+        subjectName: null,
+        title: 'Bài cũ',
+        plannedDate: new Date('2026-08-25T00:00:00'),
+        startTime: '07:00',
+        endTime: '07:45',
+        deletedAt: null,
+        classroom: mockClassroom,
+      });
+      mockPrisma.schedule.findMany.mockResolvedValueOnce([]);
+      mockPrisma.schedule.update.mockImplementationOnce(({ data }: any) => ({
+        id: 'sched-1',
+        teacherId: mockTeacherId,
+        classroomId: mockClassroomId,
+        subjectId: mockSubjectId,
+        ...data,
+        title: 'Bài cũ',
+        plannedDate: new Date('2026-08-25T00:00:00'),
+        startTime: '07:00',
+        endTime: '07:45',
+        classroom: mockClassroom,
+        subject: mockSubject,
+        schoolYear: mockSchoolYear,
+      }));
+
+      const result = await service.update(
+        'sched-1',
+        { subjectName: '  Giáo dục thể chất  ' },
+        mockTeacherId,
+      );
+
+      expect(result.subjectName).toBe('Giáo dục thể chất');
+      expect(mockPrisma.schedule.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ subjectName: 'Giáo dục thể chất' }),
+        }),
+      );
+    });
+
+    it('falls back to Subject.name for a legacy schedule', async () => {
+      mockPrisma.schedule.findMany.mockResolvedValueOnce([
+        {
+          id: 'legacy-sched',
+          teacherId: mockTeacherId,
+          classroomId: mockClassroomId,
+          subjectId: mockSubjectId,
+          subjectName: null,
+          title: 'Bài cũ',
+          plannedDate: new Date('2026-08-25T00:00:00'),
+          startTime: '07:00',
+          endTime: '07:45',
+          classroom: mockClassroom,
+          subject: mockSubject,
+          schoolYear: mockSchoolYear,
+        },
+      ]);
+
+      const [result] = await service.findAll(mockTeacherId);
+
+      expect(result.subjectName).toBe(mockSubject.name);
+    });
+
+    it('validates subjectName as trimmed, required, and at most 100 characters', async () => {
+      const validDto = plainToInstance(CreateScheduleDto, {
+        classroomId: 'a1b2c3d4-e5f6-4a8b-9c0d-1e2f3a4b5c6d',
+        subjectName: '  Toán học  ',
+        title: 'Bài học',
+      });
+      expect(await validate(validDto)).toHaveLength(0);
+      expect(validDto.subjectName).toBe('Toán học');
+
+      const blankDto = plainToInstance(CreateScheduleDto, {
+        classroomId: 'a1b2c3d4-e5f6-4a8b-9c0d-1e2f3a4b5c6d',
+        subjectName: '   ',
+        title: 'Bài học',
+      });
+      expect((await validate(blankDto)).some((error) => error.property === 'subjectName')).toBe(true);
+
+      const longDto = plainToInstance(CreateScheduleDto, {
+        classroomId: 'a1b2c3d4-e5f6-4a8b-9c0d-1e2f3a4b5c6d',
+        subjectName: 'a'.repeat(101),
+        title: 'Bài học',
+      });
+      expect((await validate(longDto)).some((error) => error.property === 'subjectName')).toBe(true);
     });
   });
 

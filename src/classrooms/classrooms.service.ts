@@ -757,7 +757,7 @@ export class ClassroomsService {
           studentId: sa.studentId,
           studentName: sa.student?.fullName || 'Học sinh',
           date: sess.attendanceDate.toISOString().split('T')[0],
-          subjectName: sess.schedule?.subject?.name || 'Môn học',
+          subjectName: sess.schedule?.subjectName || sess.schedule?.subject?.name || 'Môn học',
           note: sa.note || '',
         };
         if (sa.status === 'LATE') {
@@ -794,7 +794,7 @@ export class ClassroomsService {
         plannedDate: s.plannedDate.toISOString().split('T')[0],
         startTime: s.startTime,
         endTime: s.endTime,
-        subjectName: s.subject?.name || 'Môn học',
+        subjectName: s.subjectName || s.subject?.name || 'Môn học',
         teacherName: s.teacher?.fullName || 'Giáo viên',
         room: s.room || classroom.room,
         status: s.status,
@@ -1310,7 +1310,7 @@ export class ClassroomsService {
         id: sess.id,
         scheduleId: sess.scheduleId,
         date: sess.attendanceDate.toISOString().split('T')[0],
-        subjectName: sess.schedule?.subject?.name || 'Môn học',
+        subjectName: sess.schedule?.subjectName || sess.schedule?.subject?.name || 'Môn học',
         teacherName: sess.teacher?.fullName || 'Giáo viên',
         stats: {
           present: sPresent,

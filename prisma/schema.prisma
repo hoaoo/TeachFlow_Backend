@@ -406,7 +406,8 @@ model Schedule {
   teacherId         String
   schoolYearId      String
   classroomId       String
-  subjectId         String
+  subjectId         String?
+  subjectName       String?
   lessonPlanId      String?
   title             String
   plannedDate       DateTime
@@ -429,7 +430,7 @@ model Schedule {
   teacher           Teacher            @relation(fields: [teacherId], references: [id])
   schoolYear        SchoolYear         @relation(fields: [schoolYearId], references: [id])
   classroom         Classroom          @relation(fields: [classroomId], references: [id])
-  subject           Subject            @relation(fields: [subjectId], references: [id])
+  subject           Subject?           @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   lessonPlan        LessonPlan?        @relation(fields: [lessonPlanId], references: [id], onDelete: SetNull)
   attendanceSession AttendanceSession?
 

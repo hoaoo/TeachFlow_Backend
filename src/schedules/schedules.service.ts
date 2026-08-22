@@ -24,70 +24,25 @@ export class SchedulesService {
     @Optional() private notificationsService?: NotificationsService,
   ) {}
 
-  async getAvailableSubjects(classroomId: string, teacherId?: string) {
-    if (!teacherId) {
-      throw new ForbiddenException('Tài khoản hiện tại không có hồ sơ giáo viên');
-    }
-
-    const teacher = await this.prisma.teacher.findUnique({
-      where: { id: teacherId },
-      select: { teachingMode: true },
+  private async assertClassroomAccess(classroomId: string, teacherId: string) {
+    const classroom = await this.prisma.classroom.findUnique({
+      where: { id: classroomId },
     });
-    if (!teacher) {
-      throw new ForbiddenException('Không tìm thấy hồ sơ giáo viên hiện tại');
+    if (!classroom || classroom.deletedAt || classroom.isActive === false) {
+      throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
     }
 
-    if (teacher.teachingMode === 'PRIMARY_GENERALIST') {
-      const classroom = await this.prisma.classroom.findFirst({
-        where: {
-          id: classroomId,
-          teacherId,
-          deletedAt: null,
-          isActive: true,
-        },
+    if (classroom.teacherId !== teacherId) {
+      const assignment = await this.prisma.teachingAssignment.findFirst({
+        where: { teacherId, classroomId, isActive: true },
         select: { id: true },
       });
-      if (!classroom) return [];
-
-      const configured = await this.prisma.classSubject.findMany({
-        where: {
-          classroomId,
-          isActive: true,
-          subject: { isActive: true },
-        },
-        select: { subject: { select: { id: true, code: true, name: true } } },
-        orderBy: { subject: { sortOrder: 'asc' } },
-      });
-      return configured.map((item) => item.subject);
+      if (!assignment) {
+        throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
+      }
     }
 
-    const assignments = await this.prisma.teachingAssignment.findMany({
-      where: {
-        teacherId,
-        classroomId,
-        isActive: true,
-        classroom: { deletedAt: null, isActive: true },
-        subject: { isActive: true },
-      },
-      select: { subject: { select: { id: true, code: true, name: true } } },
-      orderBy: { subject: { sortOrder: 'asc' } },
-    });
-
-    const unique = new Map(assignments.map((item) => [item.subject.id, item.subject]));
-    return [...unique.values()];
-  }
-
-  private async assertSubjectAvailable(
-    classroomId: string,
-    subjectId: string,
-    teacherId: string,
-  ) {
-    const available = await this.getAvailableSubjects(classroomId, teacherId);
-    if (!available.some((subject) => subject.id === subjectId)) {
-      throw new ForbiddenException(
-        'Môn học không được phép lên lịch cho giáo viên và lớp học hiện tại',
-      );
-    }
+    return classroom;
   }
 
   /**
@@ -130,7 +85,7 @@ export class SchedulesService {
       if (existing.startTime && existing.endTime && existing.status !== 'CANCELLED') {
         if (startTime < existing.endTime && endTime > existing.startTime) {
           const isTeacherConflict = existing.teacherId === teacherId;
-          const conflictSubject = existing.subject?.name || 'môn học';
+          const conflictSubject = existing.subjectName || existing.subject?.name || 'môn học';
           const conflictClass = existing.classroom?.name || classroomName || 'lớp học';
           const dateStr = plannedDate.toLocaleDateString('vi-VN');
 
@@ -190,6 +145,7 @@ export class SchedulesService {
         { notes: { contains: q, mode: 'insensitive' } },
         { room: { contains: q, mode: 'insensitive' } },
         { classroom: { name: { contains: q, mode: 'insensitive' } } },
+        { subjectName: { contains: q, mode: 'insensitive' } },
         { subject: { name: { contains: q, mode: 'insensitive' } } },
       ];
     }
@@ -292,24 +248,10 @@ export class SchedulesService {
   }
 
   async create(dto: CreateScheduleDto, teacherId: string) {
-    // Load the target class, then enforce mode-aware teacher/class/subject ownership.
-    const classroom = await this.prisma.classroom.findUnique({
-      where: { id: dto.classroomId },
-    });
-    if (!classroom || classroom.deletedAt || classroom.isActive === false) {
-      throw new ForbiddenException('Bạn không có quyền lên lịch cho lớp học này');
-    }
-    await this.assertSubjectAvailable(dto.classroomId, dto.subjectId, teacherId);
+    // Keep class authorization independent from the free-text subject name.
+    const classroom = await this.assertClassroomAccess(dto.classroomId, teacherId);
 
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
-
-    // Validate subject exists
-    const subject = await this.prisma.subject.findUnique({
-      where: { id: dto.subjectId },
-    });
-    if (!subject || !subject.isActive) {
-      throw new NotFoundException(`Không tìm thấy môn học với mã ${dto.subjectId}`);
-    }
 
     // Validate schoolYear
     const schoolYear = await this.prisma.schoolYear.findUnique({
@@ -382,7 +324,8 @@ export class SchedulesService {
             data: {
               teacherId,
               classroomId: dto.classroomId,
-              subjectId: dto.subjectId,
+              subjectId: null,
+              subjectName: dto.subjectName.trim(),
               schoolYearId,
               lessonPlanId: dto.lessonPlanId || null,
               title: dto.title.trim(),
@@ -438,7 +381,8 @@ export class SchedulesService {
       data: {
         teacherId,
         classroomId: dto.classroomId,
-        subjectId: dto.subjectId,
+        subjectId: null,
+        subjectName: dto.subjectName.trim(),
         schoolYearId,
         lessonPlanId: dto.lessonPlanId || null,
         title: dto.title.trim(),
@@ -546,6 +490,7 @@ export class SchedulesService {
             where: { id: s.id },
             data: {
               title: dto.title?.trim(),
+              subjectName: dto.subjectName?.trim(),
               status: dto.status,
               isManualStatus: isManual,
               room: dto.room?.trim(),
@@ -605,6 +550,7 @@ export class SchedulesService {
       where: { id },
       data: {
         title: dto.title?.trim(),
+        subjectName: dto.subjectName?.trim(),
         status: dto.status,
         isManualStatus: isManual,
         room: dto.room?.trim(),
@@ -722,12 +668,10 @@ export class SchedulesService {
     }
 
     const targetClassroomId = dto.classroomId || existing.classroomId;
-    const targetSubjectId = dto.subjectId || existing.subjectId;
+    const targetClassroom = await this.assertClassroomAccess(targetClassroomId, teacherId);
     const targetTitle = dto.title?.trim() || existing.title;
     const targetStartTime = dto.startTime || existing.startTime;
     const targetEndTime = dto.endTime || existing.endTime;
-
-    await this.assertSubjectAvailable(targetClassroomId, targetSubjectId, teacherId);
 
     if (targetStartTime >= targetEndTime) {
       throw new BadRequestException('Giờ bắt đầu phải nhỏ hơn giờ kết thúc');
@@ -745,13 +689,15 @@ export class SchedulesService {
       plannedDate: targetDate,
       startTime: targetStartTime,
       endTime: targetEndTime,
+      classroomName: targetClassroom.name,
     });
 
     const duplicated = await this.prisma.schedule.create({
       data: {
         teacherId,
         classroomId: targetClassroomId,
-        subjectId: targetSubjectId,
+        subjectId: existing.subjectId,
+        subjectName: existing.subjectName || existing.subject?.name || 'Môn học',
         schoolYearId: existing.schoolYearId,
         title: targetTitle,
         plannedDate: targetDate,
@@ -998,6 +944,7 @@ export class SchedulesService {
           }
         : undefined,
       subjectId: s.subjectId,
+      subjectName: s.subjectName || s.subject?.name || null,
       subject: s.subject
         ? {
             id: s.subject.id,

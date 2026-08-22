@@ -4,8 +4,10 @@ import {
   IsNotEmpty,
   IsOptional,
   IsUUID,
+  MaxLength,
   Matches,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateScheduleDto {
   @ApiProperty({ description: 'ID lớp học (UUID)', example: 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d' })
@@ -13,10 +15,12 @@ export class CreateScheduleDto {
   @IsNotEmpty({ message: 'Vui lòng chọn lớp học' })
   classroomId: string;
 
-  @ApiProperty({ description: 'ID môn học (UUID)', example: 'b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e' })
-  @IsUUID(4, { message: 'ID môn học không hợp lệ' })
-  @IsNotEmpty({ message: 'Vui lòng chọn môn học' })
-  subjectId: string;
+  @ApiProperty({ description: 'Tên môn học do giáo viên nhập', example: 'Toán học', maxLength: 100 })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString({ message: 'Môn học phải là chuỗi' })
+  @IsNotEmpty({ message: 'Vui lòng nhập môn học' })
+  @MaxLength(100, { message: 'Môn học không được vượt quá 100 ký tự' })
+  subjectName: string;
 
   @ApiPropertyOptional({ description: 'ID năm học (UUID)', example: 'c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f' })
   @IsUUID(4, { message: 'ID năm học không hợp lệ' })

@@ -113,7 +113,7 @@ export class AttendanceService {
         classroomId: schedule.classroomId,
         className: schedule.classroom?.name || 'Lớp học',
         subjectId: schedule.subjectId,
-        subjectName: schedule.subject?.name || 'Môn học',
+        subjectName: schedule.subjectName || schedule.subject?.name || 'Môn học',
         room: schedule.room || schedule.classroom?.room || 'Phòng học',
       },
       isRecorded: !!session,
@@ -350,7 +350,7 @@ export class AttendanceService {
       recentLogs: records.map((r) => ({
         id: r.id,
         date: r.attendanceSession.attendanceDate.toISOString().split('T')[0],
-        subjectName: r.attendanceSession.schedule?.subject?.name || r.attendanceSession.title || 'Tiết học',
+        subjectName: r.attendanceSession.schedule?.subjectName || r.attendanceSession.schedule?.subject?.name || r.attendanceSession.title || 'Tiết học',
         startTime: r.attendanceSession.schedule?.startTime || '07:00',
         endTime: r.attendanceSession.schedule?.endTime || '07:45',
         status: r.status,
