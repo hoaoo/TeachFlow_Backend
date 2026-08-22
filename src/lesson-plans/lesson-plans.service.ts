@@ -3,18 +3,32 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
+  PayloadTooLargeException,
   Logger,
   Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as path from 'path';
+import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
+import { StorageService } from '../resources/storage/storage.service';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
 import { UpdateActivityDto } from './dto/update-activity.dto';
 import { ReorderActivitiesDto } from './dto/reorder-activities.dto';
 import { SaveActivityToLibraryDto } from './dto/save-to-library.dto';
+import { UploadLessonPlanDto } from './dto/upload-lesson-plan.dto';
+
+const ALLOWED_UPLOAD_EXTENSIONS = ['.docx', '.pdf'];
+const DANGEROUS_EXTENSIONS = [
+  '.exe', '.bat', '.cmd', '.sh', '.ps1', '.vbs', '.js', '.ts',
+  '.php', '.py', '.rb', '.pl', '.html', '.htm', '.msi', '.jar',
+  '.com', '.scr'
+];
 
 @Injectable()
 export class LessonPlansService {
@@ -23,6 +37,8 @@ export class LessonPlansService {
   constructor(
     private prisma: PrismaService,
     private assignmentAuth: TeachingAssignmentAuthorizationService,
+    private storageService: StorageService,
+    private configService: ConfigService,
     @Optional() private auditService?: AuditService,
   ) {}
 
@@ -73,6 +89,7 @@ export class LessonPlansService {
             { topic: { contains: q, mode: 'insensitive' } },
             { subjectName: { contains: q, mode: 'insensitive' } },
             { gradeName: { contains: q, mode: 'insensitive' } },
+            { originalFileName: { contains: q, mode: 'insensitive' } },
             { classroom: { name: { contains: q, mode: 'insensitive' } } },
             { subject: { name: { contains: q, mode: 'insensitive' } } },
           ],
@@ -242,6 +259,7 @@ export class LessonPlansService {
           subjectId: effectiveSubjectId,
           lessonId: dto.lessonId,
           status: (dto.status as any) || 'DRAFT',
+          sourceType: 'NATIVE',
           version: 1,
         },
       });
@@ -317,6 +335,189 @@ export class LessonPlansService {
 
       return this.mapLessonPlanDetail(fullCreated);
     });
+  }
+
+  async uploadLessonPlan(
+    file: Express.Multer.File,
+    dto: UploadLessonPlanDto,
+    teacherId: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn tập tin giáo án để tải lên');
+    }
+
+    // 1. File size limit
+    const maxSizeMb = parseInt(
+      this.configService.get<string>('LESSON_PLAN_UPLOAD_MAX_SIZE') || '25',
+      10,
+    );
+    const maxBytes = maxSizeMb * 1024 * 1024;
+    if (file.size > maxBytes) {
+      throw new PayloadTooLargeException(
+        `Dung lượng tập tin (${(file.size / (1024 * 1024)).toFixed(1)}MB) vượt quá giới hạn cho phép (${maxSizeMb}MB)`,
+      );
+    }
+
+    // 2. Sanitize and validate extension
+    const rawName = file.originalname || 'uploaded_lesson_plan';
+    const sanitizedOriginalName = path.basename(rawName).replace(/[\r\n\t]/g, '');
+    const ext = path.extname(sanitizedOriginalName).toLowerCase();
+
+    if (DANGEROUS_EXTENSIONS.includes(ext)) {
+      throw new BadRequestException('Tập tin chứa phần mở rộng nguy hiểm không được phép');
+    }
+
+    if (!ALLOWED_UPLOAD_EXTENSIONS.includes(ext)) {
+      throw new BadRequestException(
+        `Hệ thống hiện chỉ hỗ trợ tải lên file DOCX hoặc PDF (.docx, .pdf). Phần mở rộng nhận được: ${ext || 'không có'}`,
+      );
+    }
+
+    // 3. Determine MIME
+    const mimeType =
+      ext === '.pdf'
+        ? 'application/pdf'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    // 4. Verify schedule ownership if scheduleId is supplied
+    if (dto.scheduleId) {
+      const sched = await this.prisma.schedule.findUnique({
+        where: { id: dto.scheduleId },
+      });
+      if (!sched || sched.deletedAt || sched.teacherId !== teacherId) {
+        throw new ForbiddenException('Lịch dạy không tồn tại hoặc không thuộc quyền sở hữu của bạn');
+      }
+    }
+
+    // 5. Save file physically to storage
+    const stored = await this.storageService.saveFile(file, ext);
+
+    try {
+      // Determine title
+      const title =
+        dto.title?.trim() ||
+        path.basename(sanitizedOriginalName, ext).trim() ||
+        'Giáo án tải lên';
+
+      let effectiveClassroomId = dto.classroomId || null;
+      let effectiveSubjectId = dto.subjectId || null;
+      let effectiveSubjectName = dto.subject || 'Toán';
+      let effectiveGradeName = dto.grade || 'Lớp 4A';
+
+      if (dto.classroomId) {
+        const cls = await this.prisma.classroom.findUnique({
+          where: { id: dto.classroomId },
+          include: { grade: true },
+        });
+        if (cls) {
+          effectiveGradeName = cls.grade?.name || cls.name;
+        }
+      }
+
+      const plan = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.lessonPlan.create({
+          data: {
+            teacherId,
+            title,
+            topic: dto.topic?.trim() || null,
+            subjectName: effectiveSubjectName,
+            gradeName: effectiveGradeName,
+            teachingDate: dto.date ? new Date(dto.date) : new Date(),
+            durationMinutes: 40,
+            objectives: 'Giáo án được tải lên từ tập tin gốc.',
+            notes: dto.notes?.trim() || null,
+            classroomId: effectiveClassroomId,
+            subjectId: effectiveSubjectId,
+            status: 'COMPLETED',
+            sourceType: 'UPLOADED',
+            originalFileName: sanitizedOriginalName,
+            storedFileName: stored.storedFileName,
+            storagePath: stored.storagePath,
+            mimeType,
+            fileSize: stored.size,
+            version: 1,
+          },
+        });
+
+        if (dto.scheduleId) {
+          await tx.schedule.update({
+            where: { id: dto.scheduleId },
+            data: { lessonPlanId: created.id },
+          });
+        }
+
+        await tx.lessonPlanVersion.create({
+          data: {
+            lessonPlanId: created.id,
+            versionNumber: 1,
+            title: created.title,
+            contentSnapshot: JSON.stringify({
+              title: created.title,
+              sourceType: 'UPLOADED',
+              originalFileName: sanitizedOriginalName,
+              fileSize: stored.size,
+            }),
+            changeSummary: `Tải lên file ${sanitizedOriginalName}`,
+            createdById: teacherId,
+          },
+        });
+
+        return created;
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'LESSON_PLAN_UPLOAD',
+        resourceType: 'LessonPlan',
+        resourceId: plan.id,
+        details: {
+          title: plan.title,
+          originalFileName: sanitizedOriginalName,
+          size: stored.size,
+        },
+      });
+
+      return this.findOne(plan.id, teacherId);
+    } catch (err) {
+      // Compensation: Clean up physical file if DB transaction failed
+      try {
+        await this.storageService.deleteFile(stored.storedFileName);
+      } catch (cleanErr) {
+        this.logger.warn(`Failed to clean up stored file ${stored.storedFileName} after DB error`);
+      }
+      throw err;
+    }
+  }
+
+  async getLessonPlanFile(id: string, teacherId: string) {
+    const plan = await this.prisma.lessonPlan.findUnique({
+      where: { id },
+      include: { teachingAssignment: true },
+    });
+
+    if (!plan || plan.deletedAt) {
+      throw new NotFoundException('Không tìm thấy giáo án');
+    }
+
+    const planTeacherId = plan.teachingAssignment?.teacherId || plan.teacherId;
+    if (planTeacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền tải tập tin giáo án này');
+    }
+
+    if (plan.sourceType !== 'UPLOADED' || !plan.storedFileName) {
+      throw new BadRequestException('Giáo án này không có tập tin tải lên nguồn');
+    }
+
+    const filePath = this.storageService.getSafeFilePath(plan.storedFileName);
+    if (!fs.existsSync(filePath)) {
+      throw new NotFoundException('Tập tin không tồn tại trên hệ thống lưu trữ');
+    }
+
+    return {
+      filePath,
+      mimeType: plan.mimeType || 'application/octet-stream',
+      originalFileName: plan.originalFileName || `${plan.title}.docx`,
+    };
   }
 
   async update(id: string, dto: UpdateLessonPlanDto, teacherId: string) {
@@ -485,6 +686,12 @@ export class LessonPlansService {
           postLessonAdjustment: null,
           notes: original.notes,
           classroomId: customOptions?.classroomId || null,
+          sourceType: original.sourceType || 'NATIVE',
+          originalFileName: original.originalFileName || null,
+          storedFileName: original.storedFileName || null,
+          storagePath: original.storagePath || null,
+          mimeType: original.mimeType || null,
+          fileSize: original.fileSize || null,
           status: 'DRAFT',
           version: 1,
         },
@@ -915,6 +1122,10 @@ export class LessonPlansService {
       date: plan.teachingDate ? new Date(plan.teachingDate).toISOString().split('T')[0] : null,
       duration: plan.durationMinutes || 40,
       status: plan.status || 'DRAFT',
+      sourceType: plan.sourceType || 'NATIVE',
+      originalFileName: plan.originalFileName || null,
+      mimeType: plan.mimeType || null,
+      fileSize: plan.fileSize || null,
       version: plan.version || 1,
       activitiesCount: (plan.activities || []).length,
       schedulesCount: (plan.schedules || []).length,
@@ -945,6 +1156,12 @@ export class LessonPlansService {
       postLessonAdjustment: plan.postLessonAdjustment || '',
       notes: plan.notes || '',
       status: plan.status || 'DRAFT',
+      sourceType: plan.sourceType || 'NATIVE',
+      originalFileName: plan.originalFileName || null,
+      storedFileName: plan.storedFileName || null,
+      storagePath: plan.storagePath || null,
+      mimeType: plan.mimeType || null,
+      fileSize: plan.fileSize || null,
       version: plan.version || 1,
       activities,
       resources,

@@ -8,8 +8,13 @@ import {
   Param,
   Body,
   Query,
+  UseInterceptors,
+  UploadedFile,
+  Res,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { LessonPlansService } from './lesson-plans.service';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
@@ -17,6 +22,7 @@ import { CreateActivityDto } from './dto/create-activity.dto';
 import { UpdateActivityDto } from './dto/update-activity.dto';
 import { ReorderActivitiesDto } from './dto/reorder-activities.dto';
 import { SaveActivityToLibraryDto } from './dto/save-to-library.dto';
+import { UploadLessonPlanDto } from './dto/upload-lesson-plan.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Lesson Plans')
@@ -52,6 +58,35 @@ export class LessonPlansController {
     });
   }
 
+  @Post('upload')
+  @ApiOperation({ summary: 'Tải giáo án lên từ file DOCX hoặc PDF' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        title: { type: 'string' },
+        subject: { type: 'string' },
+        grade: { type: 'string' },
+        classroomId: { type: 'string' },
+        subjectId: { type: 'string' },
+        date: { type: 'string' },
+        topic: { type: 'string' },
+        notes: { type: 'string' },
+        scheduleId: { type: 'string' },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async upload(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadLessonPlanDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.uploadLessonPlan(file, dto, user.teacherId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Xem chi tiết giáo án' })
   async findOne(
@@ -59,6 +94,22 @@ export class LessonPlansController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.findOne(id, user.teacherId);
+  }
+
+  @Get(':id/file')
+  @ApiOperation({ summary: 'Tải hoặc xem tệp nguồn của giáo án tải lên' })
+  async getFile(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: Response,
+  ) {
+    const fileInfo = await this.lessonPlansService.getLessonPlanFile(id, user.teacherId);
+    res.setHeader('Content-Type', fileInfo.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(fileInfo.originalFileName)}"`,
+    );
+    return res.sendFile(fileInfo.filePath);
   }
 
   @Post()

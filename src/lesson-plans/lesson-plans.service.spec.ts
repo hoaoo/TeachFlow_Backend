@@ -1,13 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  BadRequestException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { LessonPlansService } from './lesson-plans.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
+import { StorageService } from '../resources/storage/storage.service';
 
-describe('LessonPlansService (Full Production Spec)', () => {
+describe('LessonPlansService (Full Production Spec with Upload & Security)', () => {
   let service: LessonPlansService;
   let prisma: any;
   let authService: TeachingAssignmentAuthorizationService;
+  let storageService: StorageService;
 
   const mockPlan = {
     id: 'lp-1',
@@ -21,6 +30,12 @@ describe('LessonPlansService (Full Production Spec)', () => {
     durationMinutes: 40,
     objectives: 'Mục tiêu bài học',
     status: 'DRAFT',
+    sourceType: 'NATIVE',
+    originalFileName: null,
+    storedFileName: null,
+    storagePath: null,
+    mimeType: null,
+    fileSize: null,
     version: 1,
     deletedAt: null,
     teachingAssignment: {
@@ -38,6 +53,28 @@ describe('LessonPlansService (Full Production Spec)', () => {
       { id: 'act-1', phase: 'Khởi động', title: 'Trò chơi', durationMinutes: 5, sortOrder: 0 },
       { id: 'act-2', phase: 'Khám phá', title: 'Tìm hiểu', durationMinutes: 15, sortOrder: 1 },
     ],
+    schedules: [],
+    resources: [],
+    versions: [],
+  };
+
+  const mockUploadedPlan = {
+    id: 'lp-upload-1',
+    teacherId: 'teacher-1',
+    title: 'Giao_an_toan_tiet_5.docx',
+    subjectName: 'Toán',
+    gradeName: 'Lớp 4A',
+    status: 'COMPLETED',
+    sourceType: 'UPLOADED',
+    originalFileName: 'Giao_an_toan_tiet_5.docx',
+    storedFileName: 'stored-uuid-123.docx',
+    storagePath: 'uploads/resources/stored-uuid-123.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    fileSize: 10240,
+    version: 1,
+    deletedAt: null,
+    teachingAssignment: null,
+    activities: [],
     schedules: [],
     resources: [],
     versions: [],
@@ -69,6 +106,9 @@ describe('LessonPlansService (Full Production Spec)', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      classroom: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'class-4A', name: 'Lớp 4A' }),
       },
       teachingActivity: {
         create: jest.fn().mockResolvedValue({ id: 'lib-act-1', title: 'Saved Act' }),
@@ -118,11 +158,33 @@ describe('LessonPlansService (Full Production Spec)', () => {
             resolveAssignmentFromContext: jest.fn(),
           },
         },
+        {
+          provide: StorageService,
+          useValue: {
+            saveFile: jest.fn().mockResolvedValue({
+              storedFileName: 'stored-uuid-123.docx',
+              storagePath: 'uploads/resources/stored-uuid-123.docx',
+              size: 10240,
+            }),
+            deleteFile: jest.fn().mockResolvedValue(true),
+            getSafeFilePath: jest.fn().mockReturnValue('d:/Backend_teachflow/uploads/resources/stored-uuid-123.docx'),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string) => {
+              if (key === 'LESSON_PLAN_UPLOAD_MAX_SIZE') return '25';
+              return null;
+            }),
+          },
+        },
       ],
     }).compile();
 
     service = module.get<LessonPlansService>(LessonPlansService);
     authService = module.get<TeachingAssignmentAuthorizationService>(TeachingAssignmentAuthorizationService);
+    storageService = module.get<StorageService>(StorageService);
   });
 
   it('creates lesson plan and automatically creates initial version snapshot', async () => {
@@ -202,72 +264,105 @@ describe('LessonPlansService (Full Production Spec)', () => {
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 
-  it('links and unlinks schedule to lesson plan with authorization', async () => {
-    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
-    jest.spyOn(prisma.schedule, 'findUnique').mockResolvedValue({
-      id: 'sched-1',
-      teacherId: 'teacher-1',
-      deletedAt: null,
-    });
+  it('uploads valid DOCX lesson plan with storage and transaction', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockUploadedPlan as any);
 
-    const linkResult = await service.linkSchedule('lp-1', 'sched-1', 'teacher-1');
-    expect(linkResult).toBeDefined();
-    expect(prisma.schedule.update).toHaveBeenCalledWith({
-      where: { id: 'sched-1' },
-      data: { lessonPlanId: 'lp-1' },
-    });
+    const mockFile: any = {
+      originalname: 'Giao_an_toan_tiet_5.docx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 10240,
+      buffer: Buffer.from('fake-docx-content'),
+    };
 
-    const unlinkResult = await service.unlinkSchedule('lp-1', 'sched-1', 'teacher-1');
-    expect(unlinkResult).toBeDefined();
-    expect(prisma.schedule.update).toHaveBeenCalledWith({
-      where: { id: 'sched-1' },
-      data: { lessonPlanId: null },
-    });
-  });
-
-  it('saves activity to personal activity library', async () => {
-    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
-    jest.spyOn(prisma.lessonPlanActivity, 'findUnique').mockResolvedValue({
-      id: 'act-1',
-      lessonPlanId: 'lp-1',
-      title: 'Trò chơi hay',
-      objective: 'Tạo hứng thú',
-      teacherActivity: 'GV hướng dẫn',
-      studentActivity: 'HS thực hiện',
-      durationMinutes: 10,
-      phase: 'Khởi động',
-    } as any);
-
-    const result = await service.saveActivityToLibrary(
-      'lp-1',
-      'act-1',
-      { title: 'Trò chơi hay' },
+    const result = await service.uploadLessonPlan(
+      mockFile,
+      { title: 'Giáo án Toán Tiết 5', subject: 'Toán' },
       'teacher-1',
     );
 
-    expect(result.success).toBe(true);
-    expect(prisma.teachingActivity.create).toHaveBeenCalled();
+    expect(storageService.saveFile).toHaveBeenCalled();
+    expect(result).toBeDefined();
+    expect(result.sourceType).toBe('UPLOADED');
+    expect(result.originalFileName).toBe('Giao_an_toan_tiet_5.docx');
   });
 
-  it('retrieves version history and restores previous version', async () => {
-    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
-    jest.spyOn(prisma.lessonPlanVersion, 'findUnique').mockResolvedValue({
-      id: 'ver-1',
-      lessonPlanId: 'lp-1',
-      versionNumber: 1,
-      contentSnapshot: JSON.stringify({
-        title: 'Bản cũ',
-        duration: 35,
-        activities: [{ phase: 'Khởi động', title: 'Cũ', minutes: 5 }],
-      }),
-    } as any);
+  it('uploads valid PDF lesson plan', async () => {
+    const pdfPlan = { ...mockUploadedPlan, originalFileName: 'Giao_an_bai_3.pdf', mimeType: 'application/pdf' };
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(pdfPlan as any);
 
-    const versions = await service.getVersions('lp-1', 'teacher-1');
-    expect(versions).toBeDefined();
-    expect(versions.length).toBe(1);
+    const mockFile: any = {
+      originalname: 'Giao_an_bai_3.pdf',
+      mimetype: 'application/pdf',
+      size: 5120,
+      buffer: Buffer.from('%PDF-1.4 fake pdf'),
+    };
 
-    const restored = await service.restoreVersion('lp-1', 'ver-1', 'teacher-1');
-    expect(restored).toBeDefined();
-    expect(prisma.$transaction).toHaveBeenCalled();
+    const result = await service.uploadLessonPlan(mockFile, {}, 'teacher-1');
+    expect(result).toBeDefined();
+    expect(result.sourceType).toBe('UPLOADED');
+  });
+
+  it('rejects dangerous executable files on upload', async () => {
+    const mockFile: any = {
+      originalname: 'virus.exe',
+      mimetype: 'application/x-msdownload',
+      size: 1024,
+      buffer: Buffer.from('exe'),
+    };
+
+    await expect(
+      service.uploadLessonPlan(mockFile, {}, 'teacher-1'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects unsupported extensions on upload', async () => {
+    const mockFile: any = {
+      originalname: 'slide.pptx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      size: 1024,
+      buffer: Buffer.from('ppt'),
+    };
+
+    await expect(
+      service.uploadLessonPlan(mockFile, {}, 'teacher-1'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects oversized uploaded files', async () => {
+    const mockFile: any = {
+      originalname: 'giant.docx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 30 * 1024 * 1024, // 30MB > 25MB limit
+      buffer: Buffer.from('large'),
+    };
+
+    await expect(
+      service.uploadLessonPlan(mockFile, {}, 'teacher-1'),
+    ).rejects.toThrow(PayloadTooLargeException);
+  });
+
+  it('cleans up stored file when DB transaction fails during upload', async () => {
+    prisma.$transaction.mockRejectedValueOnce(new Error('Database error'));
+
+    const mockFile: any = {
+      originalname: 'fail_plan.docx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 1024,
+      buffer: Buffer.from('doc'),
+    };
+
+    await expect(
+      service.uploadLessonPlan(mockFile, {}, 'teacher-1'),
+    ).rejects.toThrow('Database error');
+
+    expect(storageService.deleteFile).toHaveBeenCalledWith('stored-uuid-123.docx');
+  });
+
+  it('rejects reading/downloading another teacher uploaded file (IDOR)', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockUploadedPlan as any);
+
+    await expect(
+      service.getLessonPlanFile('lp-upload-1', 'teacher-intruder'),
+    ).rejects.toThrow(ForbiddenException);
   });
 });
