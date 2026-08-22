@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { ClassroomsService } from './classrooms.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
+import { AuditService } from '../common/audit/audit.service';
 
 describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
   let service: ClassroomsService;
@@ -70,11 +72,21 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
     },
   };
 
+  const mockAssignmentAuth = {
+    assertTeacherCanAccessClassroomAttendance: jest.fn(),
+  };
+
+  const mockAuditService = {
+    log: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ClassroomsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: TeachingAssignmentAuthorizationService, useValue: mockAssignmentAuth },
+        { provide: AuditService, useValue: mockAuditService },
       ],
     }).compile();
 
