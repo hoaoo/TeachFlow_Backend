@@ -9,10 +9,11 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { StudentsService } from './students.service';
+import { StudentsService, StudentFilterQuery } from './students.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
-import { PaginationQueryDto } from '../common/dto/pagination.dto';
+import { TransferStudentDto } from './dto/transfer-student.dto';
+import { ImportStudentsDto } from './dto/import-students.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Students')
@@ -22,12 +23,21 @@ export class StudentsController {
   constructor(private studentsService: StudentsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Lấy danh sách học sinh (có phân trang, tìm kiếm, lọc)' })
+  @ApiOperation({ summary: 'Lấy danh sách học sinh (có phân trang, tìm kiếm, lọc theo lớp/khối/năm học, sắp xếp)' })
   async findAll(
-    @Query() query: PaginationQueryDto & { classId?: string; status?: string },
+    @Query() query: StudentFilterQuery,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.studentsService.findAll(query, user.teacherId);
+  }
+
+  @Post('import')
+  @ApiOperation({ summary: 'Import danh sách học sinh từ file/dữ liệu dạng bảng vào lớp' })
+  async importStudents(
+    @Body() dto: ImportStudentsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.studentsService.importStudents(dto, user.teacherId);
   }
 
   @Get(':id')
@@ -40,7 +50,7 @@ export class StudentsController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Tạo hồ sơ học sinh mới' })
+  @ApiOperation({ summary: 'Tạo hồ sơ học sinh mới và ghi danh vào lớp' })
   async create(
     @Body() dto: CreateStudentDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -59,7 +69,7 @@ export class StudentsController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Xóa học sinh' })
+  @ApiOperation({ summary: 'Rút học sinh khỏi lớp (bảo lưu lịch sử)' })
   async remove(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -67,8 +77,18 @@ export class StudentsController {
     return this.studentsService.remove(id, user.teacherId);
   }
 
+  @Post(':id/transfer')
+  @ApiOperation({ summary: 'Chuyển lớp cho học sinh' })
+  async transfer(
+    @Param('id') id: string,
+    @Body() dto: TransferStudentDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.studentsService.transferStudent(id, dto, user.teacherId);
+  }
+
   @Get(':id/overview')
-  @ApiOperation({ summary: 'Lấy tổng quan tiến độ học sinh' })
+  @ApiOperation({ summary: 'Lấy tổng quan tiến độ và chỉ số học sinh' })
   async getOverview(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -77,7 +97,7 @@ export class StudentsController {
   }
 
   @Get(':id/attendance')
-  @ApiOperation({ summary: 'Lấy lịch sử chuyên cần của học sinh' })
+  @ApiOperation({ summary: 'Lấy lịch sử và thống kê chuyên cần của học sinh' })
   async getAttendance(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -103,8 +123,18 @@ export class StudentsController {
     return this.studentsService.getComments(id, user.teacherId);
   }
 
+  @Post(':id/comments')
+  @ApiOperation({ summary: 'Thêm nhận xét cho học sinh' })
+  async addComment(
+    @Param('id') id: string,
+    @Body() body: { content: string; classroomId?: string },
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.studentsService.addComment(id, body.content, body.classroomId, user.teacherId);
+  }
+
   @Get(':id/enrollments')
-  @ApiOperation({ summary: 'Lấy lịch sử ghi danh và phân lớp của học sinh' })
+  @ApiOperation({ summary: 'Lấy lịch sử ghi danh và phân lớp của học sinh qua các năm' })
   async getEnrollments(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,

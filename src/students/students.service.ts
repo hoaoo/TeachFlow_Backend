@@ -3,55 +3,168 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
+import { TransferStudentDto } from './dto/transfer-student.dto';
+import { ImportStudentsDto, ImportStudentRowDto } from './dto/import-students.dto';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
-import { PaginatedResultDto } from '../common/dto/paginated-result.dto';
+import { AuditService } from '../common/audit/audit.service';
+
+export interface StudentFilterQuery extends PaginationQueryDto {
+  classId?: string;
+  gradeId?: string;
+  schoolYearId?: string;
+  status?: string;
+  sort?: string;
+}
 
 @Injectable()
 export class StudentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private auditService?: AuditService,
+  ) {}
 
-  async findAll(query: PaginationQueryDto & { classId?: string; status?: string }, teacherId?: string) {
-    const { page = 1, pageSize = 20, keyword, classId } = query;
+  /**
+   * Helper: Get accessible classroom IDs for a given teacher
+   */
+  private async getTeacherAccessibleClassroomIds(teacherId: string): Promise<string[]> {
+    try {
+      const [homeroomClasses, assignedClasses] = await Promise.all([
+        this.prisma.classroom?.findMany
+          ? this.prisma.classroom.findMany({
+              where: { teacherId, deletedAt: null },
+              select: { id: true },
+            })
+          : [],
+        this.prisma.teachingAssignment?.findMany
+          ? this.prisma.teachingAssignment.findMany({
+              where: { teacherId, isActive: true },
+              select: { classroomId: true },
+            })
+          : [],
+      ]);
+
+      const ids = new Set<string>();
+      (homeroomClasses || []).forEach((c: any) => {
+        if (c && c.id) ids.add(c.id);
+      });
+      (assignedClasses || []).forEach((a: any) => {
+        if (a && a.classroomId) ids.add(a.classroomId);
+      });
+
+      return Array.from(ids);
+    } catch {
+      return [];
+    }
+  }
+
+  async findAll(query: StudentFilterQuery, teacherId?: string) {
+    const {
+      page = 1,
+      pageSize = 20,
+      keyword,
+      classId,
+      gradeId,
+      schoolYearId,
+      status,
+      sort = 'nameAsc',
+    } = query;
     const skip = (page - 1) * pageSize;
 
     const where: any = {
       deletedAt: null,
     };
 
+    // Anti-IDOR Scope: Teacher must have access to student's classroom
+    let teacherClassIds: string[] = [];
     if (teacherId) {
-      where.classStudents = {
-        some: {
-          classroom: { teacherId, deletedAt: null },
-          status: 'ACTIVE',
-        },
+      teacherClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      if (teacherClassIds.length === 0) {
+        return {
+          items: [],
+          totalItems: 0,
+          page,
+          pageSize,
+          totalPages: 0,
+          summary: {
+            totalStudents: 0,
+            activeStudents: 0,
+            needsSupportStudents: 0,
+            avgAttendanceRate: null,
+          },
+        };
+      }
+    }
+
+    // Classroom scope condition
+    const classStudentConditions: any = {
+      status: 'ACTIVE',
+    };
+
+    if (teacherId) {
+      classStudentConditions.classroomId = { in: teacherClassIds };
+    }
+
+    if (classId && classId !== 'ALL' && classId !== 'Tất cả') {
+      classStudentConditions.classroomId = classId;
+    }
+
+    if (gradeId && gradeId !== 'ALL') {
+      classStudentConditions.classroom = {
+        ...(classStudentConditions.classroom || {}),
+        gradeId,
       };
     }
 
-    if (classId && classId !== 'Tất cả') {
-      where.classStudents = {
-        some: {
-          OR: [
-            { classroomId: classId },
-            { classroom: { name: classId } },
-          ],
-          status: 'ACTIVE',
-        },
+    if (schoolYearId && schoolYearId !== 'ALL') {
+      classStudentConditions.classroom = {
+        ...(classStudentConditions.classroom || {}),
+        schoolYearId,
       };
     }
 
-    if (keyword) {
+    where.classStudents = {
+      some: classStudentConditions,
+    };
+
+    // Status filter
+    if (status && status !== 'ALL' && status !== 'Tất cả') {
+      const statusMap: Record<string, string> = {
+        Tốt: 'EXCELLENT',
+        Khá: 'GOOD',
+        'Cần cố gắng': 'NEEDS_SUPPORT',
+        EXCELLENT: 'EXCELLENT',
+        GOOD: 'GOOD',
+        NEEDS_SUPPORT: 'NEEDS_SUPPORT',
+      };
+      const dbStatus = statusMap[status] || status;
+      where.status = dbStatus;
+    }
+
+    // Search keyword
+    if (keyword && keyword.trim()) {
+      const kw = keyword.trim();
       where.OR = [
-        { fullName: { contains: keyword, mode: 'insensitive' } },
-        { studentCode: { contains: keyword, mode: 'insensitive' } },
-        { parentName: { contains: keyword, mode: 'insensitive' } },
+        { fullName: { contains: kw, mode: 'insensitive' } },
+        { studentCode: { contains: kw, mode: 'insensitive' } },
+        { parentName: { contains: kw, mode: 'insensitive' } },
+        { parentPhone: { contains: kw, mode: 'insensitive' } },
       ];
     }
 
-    const [totalItems, students] = await Promise.all([
+    // Sorting
+    let orderBy: any = { fullName: 'asc' };
+    if (sort === 'nameDesc') {
+      orderBy = { fullName: 'desc' };
+    } else if (sort === 'updatedAt') {
+      orderBy = { updatedAt: 'desc' };
+    }
+
+    const [totalItems, students, allScopeStudents] = await Promise.all([
       this.prisma.student.count({ where }),
       this.prisma.student.findMany({
         where,
@@ -60,19 +173,82 @@ export class StudentsService {
         include: {
           classStudents: {
             where: { status: 'ACTIVE' },
-            include: { classroom: true },
+            include: { classroom: { include: { grade: true, schoolYear: true } } },
           },
           comments: {
             orderBy: { commentDate: 'desc' },
             take: 1,
           },
+          studentAttendances: {
+            select: { status: true },
+          },
         },
-        orderBy: { fullName: 'asc' },
+        orderBy,
+      }),
+      // Aggregate summary across current scope
+      this.prisma.student.findMany({
+        where: {
+          deletedAt: null,
+          ...(teacherId ? { classStudents: { some: { classroomId: { in: teacherClassIds }, status: 'ACTIVE' } } } : {}),
+        },
+        select: {
+          id: true,
+          status: true,
+          studentAttendances: {
+            select: { status: true },
+          },
+        },
       }),
     ]);
 
-    const items = students.map((s) => this.mapStudentRecord(s));
-    return new PaginatedResultDto(items, totalItems, page, pageSize);
+    // Calculate Summary Stats
+    const totalStudents = allScopeStudents.length;
+    const activeStudents = allScopeStudents.filter((s) => s.status === 'EXCELLENT' || s.status === 'GOOD').length;
+    const needsSupportStudents = allScopeStudents.filter((s) => s.status === 'NEEDS_SUPPORT').length;
+
+    let totalRecordedAttendances = 0;
+    let presentAttendances = 0;
+
+    allScopeStudents.forEach((s) => {
+      (s.studentAttendances || []).forEach((att: any) => {
+        totalRecordedAttendances++;
+        if (att.status === 'PRESENT' || att.status === 'LATE') {
+          presentAttendances++;
+        }
+      });
+    });
+
+    const avgAttendanceRate: number | null =
+      totalRecordedAttendances > 0
+        ? Math.round((presentAttendances / totalRecordedAttendances) * 100)
+        : null;
+
+    let mappedItems = students.map((s) => this.mapStudentRecord(s));
+
+    // In-memory sort for attendanceLow if requested
+    if (sort === 'attendanceLow') {
+      mappedItems.sort((a, b) => {
+        const attA = a.attendance ?? 100;
+        const attB = b.attendance ?? 100;
+        return attA - attB;
+      });
+    }
+
+    const totalPages = Math.ceil(totalItems / pageSize);
+
+    return {
+      items: mappedItems,
+      totalItems,
+      page,
+      pageSize,
+      totalPages,
+      summary: {
+        totalStudents,
+        activeStudents,
+        needsSupportStudents,
+        avgAttendanceRate,
+      },
+    };
   }
 
   async findOne(id: string, teacherId?: string) {
@@ -81,17 +257,22 @@ export class StudentsService {
       include: {
         classStudents: {
           where: { status: 'ACTIVE' },
-          include: { classroom: true },
+          include: { classroom: { include: { grade: true, schoolYear: true } } },
         },
         comments: {
+          include: { teacher: true },
           orderBy: { commentDate: 'desc' },
         },
         studentAttendances: {
-          include: { attendanceSession: true },
+          include: { attendanceSession: { include: { schedule: { include: { subject: true } } } } },
           orderBy: { createdAt: 'desc' },
         },
         studentAssessments: {
-          include: { assessment: true, criterion: true },
+          include: { assessment: { include: { subject: true } }, criterion: true },
+        },
+        studentEnrollments: {
+          include: { schoolYear: true, classroom: { include: { grade: true } } },
+          orderBy: { enrolledAt: 'desc' },
         },
       },
     });
@@ -100,22 +281,32 @@ export class StudentsService {
       throw new NotFoundException(`Không tìm thấy học sinh với mã ${id}`);
     }
 
+    // Anti-IDOR: Check teacher permission
     if (teacherId) {
-      const classStudentClassIds = student.classStudents.map((cs) => cs.classroomId);
-      const isHomeroom = student.classStudents.some(
-        (cs) => cs.classroom.teacherId === teacherId,
+      const isHomeroom = (student.classStudents || []).some(
+        (cs: any) => cs.classroom && cs.classroom.teacherId === teacherId,
       );
 
       let hasAccess = isHomeroom;
-      if (!hasAccess && classStudentClassIds.length > 0) {
-        const assignedCount = await this.prisma.teachingAssignment.count({
-          where: {
-            teacherId,
-            classroomId: { in: classStudentClassIds },
-            isActive: true,
-          },
-        });
-        hasAccess = assignedCount > 0;
+      if (!hasAccess) {
+        const teacherClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+        const studentClassIds = [
+          ...(student.classStudents || []).map((cs: any) => cs.classroomId),
+          ...(student.studentEnrollments || []).map((se: any) => se.classroomId),
+        ].filter(Boolean);
+
+        hasAccess = studentClassIds.some((cid) => teacherClassIds.includes(cid));
+
+        if (!hasAccess && studentClassIds.length > 0 && this.prisma.teachingAssignment?.count) {
+          const assignedCount = await this.prisma.teachingAssignment.count({
+            where: {
+              teacherId,
+              classroomId: { in: studentClassIds },
+              isActive: true,
+            },
+          });
+          hasAccess = assignedCount > 0;
+        }
       }
 
       if (!hasAccess) {
@@ -127,7 +318,7 @@ export class StudentsService {
   }
 
   async create(dto: CreateStudentDto, teacherId: string) {
-    let classId = dto.classId;
+    let classId = dto.classroomId || dto.classId;
     if (!classId && teacherId) {
       const teacherClass = await this.prisma.classroom.findFirst({
         where: { teacherId, deletedAt: null },
@@ -138,29 +329,50 @@ export class StudentsService {
       }
     }
 
-    let classroom: any = null;
-    if (classId) {
-      classroom = await this.prisma.classroom.findUnique({
-        where: { id: classId },
-      });
-      if (!classroom || classroom.deletedAt || (teacherId && classroom.teacherId !== teacherId)) {
+    if (!classId) {
+      throw new ForbiddenException('Vui lòng chọn lớp học để ghi danh học sinh');
+    }
+
+    const classroom = await this.prisma.classroom.findUnique({
+      where: { id: classId },
+    });
+
+    if (!classroom || classroom.deletedAt) {
+      throw new NotFoundException('Không tìm thấy lớp học');
+    }
+
+    // Verify teacher permission
+    if (teacherId && classroom.teacherId !== teacherId) {
+      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      if (!accessibleClassIds.includes(classId)) {
         throw new ForbiddenException('Bạn không có quyền thêm học sinh vào lớp học này');
       }
+    }
 
-      const existingInClass = await this.prisma.classStudent.findFirst({
-        where: {
-          classroomId: classId,
-          status: 'ACTIVE',
-          student: {
-            fullName: dto.fullName.trim(),
-            deletedAt: null,
-          },
-        },
+    // Duplicate detection: studentCode uniqueness
+    if (dto.studentCode && dto.studentCode.trim()) {
+      const existingCode = await this.prisma.student.findUnique({
+        where: { studentCode: dto.studentCode.trim() },
       });
-
-      if (existingInClass) {
-        throw new ConflictException(`Học sinh "${dto.fullName.trim()}" đã có tên trong danh sách lớp`);
+      if (existingCode && !existingCode.deletedAt) {
+        throw new ConflictException(`Mã học sinh "${dto.studentCode.trim()}" đã tồn tại trên hệ thống`);
       }
+    }
+
+    // Duplicate detection: same fullName active in this classroom
+    const existingInClass = await this.prisma.classStudent.findFirst({
+      where: {
+        classroomId: classId,
+        status: 'ACTIVE',
+        student: {
+          fullName: dto.fullName.trim(),
+          deletedAt: null,
+        },
+      },
+    });
+
+    if (existingInClass) {
+      throw new ConflictException(`Học sinh "${dto.fullName.trim()}" đã có tên trong danh sách lớp`);
     }
 
     const initials =
@@ -173,12 +385,20 @@ export class StudentsService {
         .join('')
         .toUpperCase();
 
+    // Auto-generate code if empty
+    let studentCode = dto.studentCode?.trim();
+    if (!studentCode) {
+      const count = await this.prisma.student.count();
+      studentCode = `HS${String(count + 1).padStart(4, '0')}`;
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const student = await tx.student.create({
         data: {
           fullName: dto.fullName.trim(),
+          studentCode,
           initials,
-          gender: dto.gender === 'Nữ' ? 'FEMALE' : 'MALE',
+          gender: dto.gender === 'Nữ' || dto.gender === 'FEMALE' ? 'FEMALE' : 'MALE',
           dobString: dto.dob || 'Chưa cập nhật',
           parentName: dto.parentName || 'Chưa cập nhật',
           parentPhone: dto.parentPhone || 'Chưa cập nhật',
@@ -187,36 +407,34 @@ export class StudentsService {
         },
       });
 
-      if (classId && classroom) {
-        await tx.studentEnrollment.create({
+      await tx.studentEnrollment.create({
+        data: {
+          studentId: student.id,
+          schoolYearId: classroom.schoolYearId,
+          classroomId: classId,
+          status: 'ACTIVE',
+          enrolledAt: new Date(),
+          note: dto.note,
+        },
+      });
+
+      await tx.classStudent.create({
+        data: {
+          classroomId: classId,
+          studentId: student.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      if (dto.note && dto.note.trim()) {
+        await tx.studentComment.create({
           data: {
             studentId: student.id,
-            schoolYearId: classroom.schoolYearId,
+            teacherId,
             classroomId: classId,
-            status: 'ACTIVE',
-            enrolledAt: new Date(),
-            note: dto.note,
+            content: dto.note.trim(),
           },
         });
-
-        await tx.classStudent.create({
-          data: {
-            classroomId: classId,
-            studentId: student.id,
-            status: 'ACTIVE',
-          },
-        });
-
-        if (dto.note) {
-          await tx.studentComment.create({
-            data: {
-              studentId: student.id,
-              teacherId,
-              classroomId: classId,
-              content: dto.note,
-            },
-          });
-        }
       }
 
       const created = await tx.student.findUnique({
@@ -224,19 +442,22 @@ export class StudentsService {
         include: {
           classStudents: {
             where: { status: 'ACTIVE' },
-            include: { classroom: true },
+            include: { classroom: { include: { grade: true, schoolYear: true } } },
           },
           comments: {
             orderBy: { commentDate: 'desc' },
           },
-          studentAttendances: {
-            include: { attendanceSession: true },
-            orderBy: { createdAt: 'desc' },
-          },
-          studentAssessments: {
-            include: { assessment: true, criterion: true },
-          },
+          studentAttendances: true,
+          studentAssessments: true,
         },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'STUDENT_CREATE',
+        resourceType: 'Student',
+        resourceId: student.id,
+        details: { fullName: student.fullName, studentCode, classroomId: classId },
       });
 
       return this.mapStudentRecord(created);
@@ -247,16 +468,28 @@ export class StudentsService {
     await this.findOne(id, teacherId);
 
     const data: any = {};
-    if (dto.fullName) data.fullName = dto.fullName;
+    if (dto.fullName) data.fullName = dto.fullName.trim();
+    if (dto.studentCode) {
+      const code = dto.studentCode.trim();
+      const existing = await this.prisma.student.findUnique({ where: { studentCode: code } });
+      if (existing && existing.id !== id && !existing.deletedAt) {
+        throw new ConflictException(`Mã học sinh "${code}" đã được sử dụng`);
+      }
+      data.studentCode = code;
+    }
     if (dto.initials) data.initials = dto.initials;
-    if (dto.gender) data.gender = dto.gender === 'Nữ' ? 'FEMALE' : 'MALE';
+    if (dto.gender) data.gender = dto.gender === 'Nữ' || dto.gender === 'FEMALE' ? 'FEMALE' : 'MALE';
     if (dto.dob) data.dobString = dto.dob;
     if (dto.parentName) data.parentName = dto.parentName;
     if (dto.parentPhone) data.parentPhone = dto.parentPhone;
     if (dto.color) data.avatarColor = dto.color;
     if (dto.status) {
       data.status =
-        dto.status === 'Tốt' ? 'EXCELLENT' : dto.status === 'Cần cố gắng' ? 'NEEDS_SUPPORT' : 'GOOD';
+        dto.status === 'Tốt' || dto.status === 'EXCELLENT'
+          ? 'EXCELLENT'
+          : dto.status === 'Cần cố gắng' || dto.status === 'NEEDS_SUPPORT'
+          ? 'NEEDS_SUPPORT'
+          : 'GOOD';
     }
 
     await this.prisma.student.update({
@@ -264,37 +497,305 @@ export class StudentsService {
       data,
     });
 
+    this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'STUDENT_UPDATE',
+      resourceType: 'Student',
+      resourceId: id,
+      details: { updatedFields: Object.keys(data) },
+    });
+
     return this.findOne(id, teacherId);
   }
 
   async remove(id: string, teacherId: string) {
-    await this.findOne(id, teacherId);
+    const student = await this.findOne(id, teacherId);
 
-    await this.prisma.student.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      // Close active enrollments
+      await tx.studentEnrollment.updateMany({
+        where: { studentId: id, status: 'ACTIVE' },
+        data: { status: 'WITHDRAWN', leftAt: new Date() },
+      });
+
+      await tx.classStudent.updateMany({
+        where: { studentId: id, status: 'ACTIVE' },
+        data: { status: 'INACTIVE', leftAt: new Date() },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'STUDENT_LEAVE',
+        resourceType: 'Student',
+        resourceId: id,
+        details: { fullName: student.name },
+      });
+
+      return { success: true, message: 'Đã rút học sinh khỏi lớp' };
+    });
+  }
+
+  async transferStudent(id: string, dto: TransferStudentDto, teacherId: string) {
+    const student = await this.findOne(id, teacherId);
+
+    const targetClassroom = await this.prisma.classroom.findUnique({
+      where: { id: dto.targetClassroomId },
     });
 
-    return { success: true, message: 'Đã xóa học sinh' };
+    if (!targetClassroom || targetClassroom.deletedAt) {
+      throw new NotFoundException('Lớp học đích không tồn tại hoặc đã bị xóa');
+    }
+
+    if (teacherId) {
+      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      if (!accessibleClassIds.includes(dto.targetClassroomId)) {
+        throw new ForbiddenException('Bạn không có quyền chuyển học sinh vào lớp học này');
+      }
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Close old active enrollments
+      await tx.studentEnrollment.updateMany({
+        where: { studentId: id, status: 'ACTIVE' },
+        data: {
+          status: 'TRANSFERRED',
+          leftAt: new Date(),
+          transferReason: dto.reason || 'Chuyển lớp',
+        },
+      });
+
+      // 2. Update old classStudent
+      await tx.classStudent.updateMany({
+        where: { studentId: id, status: 'ACTIVE' },
+        data: { status: 'TRANSFERRED', leftAt: new Date() },
+      });
+
+      // 3. Create new enrollment
+      await tx.studentEnrollment.create({
+        data: {
+          studentId: id,
+          schoolYearId: targetClassroom.schoolYearId,
+          classroomId: dto.targetClassroomId,
+          status: 'ACTIVE',
+          enrolledAt: new Date(),
+          note: dto.reason,
+        },
+      });
+
+      // 4. Upsert classStudent for target classroom
+      await tx.classStudent.upsert({
+        where: {
+          classroomId_studentId: {
+            classroomId: dto.targetClassroomId,
+            studentId: id,
+          },
+        },
+        create: {
+          classroomId: dto.targetClassroomId,
+          studentId: id,
+          status: 'ACTIVE',
+          joinedAt: new Date(),
+        },
+        update: {
+          status: 'ACTIVE',
+          leftAt: null,
+          joinedAt: new Date(),
+        },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'STUDENT_TRANSFER',
+        resourceType: 'Student',
+        resourceId: id,
+        details: {
+          studentName: student.name,
+          targetClassroomId: dto.targetClassroomId,
+          targetClassName: targetClassroom.name,
+          reason: dto.reason,
+        },
+      });
+
+      return {
+        success: true,
+        message: `Đã chuyển học sinh ${student.name} sang lớp ${targetClassroom.name} thành công`,
+      };
+    });
+  }
+
+  async importStudents(dto: ImportStudentsDto, teacherId: string) {
+    const { classroomId, students: rows } = dto;
+
+    const classroom = await this.prisma.classroom.findUnique({
+      where: { id: classroomId },
+    });
+
+    if (!classroom || classroom.deletedAt) {
+      throw new NotFoundException('Lớp học không tồn tại');
+    }
+
+    if (teacherId) {
+      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+      if (!accessibleClassIds.includes(classroomId)) {
+        throw new ForbiddenException('Bạn không có quyền import học sinh vào lớp học này');
+      }
+    }
+
+    const errors: Array<{ row: number; fullName?: string; message: string }> = [];
+    const validRows: ImportStudentRowDto[] = [];
+    const seenCodesInBatch = new Set<string>();
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNumber = i + 1;
+
+      if (!row.fullName || !row.fullName.trim()) {
+        errors.push({ row: rowNumber, message: 'Thiếu họ và tên học sinh' });
+        continue;
+      }
+
+      if (row.studentCode && row.studentCode.trim()) {
+        const code = row.studentCode.trim();
+        if (seenCodesInBatch.has(code)) {
+          errors.push({ row: rowNumber, fullName: row.fullName, message: `Mã học sinh "${code}" bị trùng lặp trong file import` });
+          continue;
+        }
+        seenCodesInBatch.add(code);
+
+        const existingStudent = await this.prisma.student.findUnique({
+          where: { studentCode: code },
+        });
+        if (existingStudent && !existingStudent.deletedAt) {
+          errors.push({ row: rowNumber, fullName: row.fullName, message: `Mã học sinh "${code}" đã tồn tại trong hệ thống` });
+          continue;
+        }
+      }
+
+      validRows.push(row);
+    }
+
+    if (validRows.length === 0) {
+      return {
+        success: false,
+        importedCount: 0,
+        errorCount: errors.length,
+        errors,
+      };
+    }
+
+    let currentStudentCount = await this.prisma.student.count();
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const r of validRows) {
+        currentStudentCount++;
+        const studentCode = r.studentCode?.trim() || `HS${String(currentStudentCount).padStart(4, '0')}`;
+        const initials = r.fullName
+          .trim()
+          .split(' ')
+          .map((p) => p[0])
+          .slice(-2)
+          .join('')
+          .toUpperCase();
+
+        const student = await tx.student.create({
+          data: {
+            fullName: r.fullName.trim(),
+            studentCode,
+            initials,
+            gender: r.gender === 'Nữ' || r.gender === 'FEMALE' ? 'FEMALE' : 'MALE',
+            dobString: r.dob || 'Chưa cập nhật',
+            parentName: r.parentName || 'Chưa cập nhật',
+            parentPhone: r.parentPhone || 'Chưa cập nhật',
+            status: 'GOOD',
+          },
+        });
+
+        await tx.studentEnrollment.create({
+          data: {
+            studentId: student.id,
+            schoolYearId: classroom.schoolYearId,
+            classroomId,
+            status: 'ACTIVE',
+            enrolledAt: new Date(),
+            note: r.note,
+          },
+        });
+
+        await tx.classStudent.create({
+          data: {
+            classroomId,
+            studentId: student.id,
+            status: 'ACTIVE',
+          },
+        });
+
+        if (r.note && r.note.trim()) {
+          await tx.studentComment.create({
+            data: {
+              studentId: student.id,
+              teacherId,
+              classroomId,
+              content: r.note.trim(),
+            },
+          });
+        }
+      }
+    });
+
+    this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'STUDENT_IMPORT',
+      resourceType: 'Classroom',
+      resourceId: classroomId,
+      details: { importedCount: validRows.length, errorCount: errors.length },
+    });
+
+    return {
+      success: true,
+      importedCount: validRows.length,
+      errorCount: errors.length,
+      errors,
+      message: `Đã import thành công ${validRows.length} học sinh vào lớp ${classroom.name}`,
+    };
   }
 
   async getOverview(id: string, teacherId: string) {
     const student = await this.findOne(id, teacherId);
+
+    const attendances = await this.prisma.studentAttendance.findMany({
+      where: { studentId: id },
+    });
+
+    const totalSessions = attendances.length;
+    const present = attendances.filter((a: any) => a.status === 'PRESENT' || a.status === 'LATE').length;
+    const absences = attendances.filter((a: any) => a.status === 'EXCUSED_ABSENCE' || a.status === 'UNEXCUSED_ABSENCE').length;
+    const lates = attendances.filter((a: any) => a.status === 'LATE').length;
+    const attendanceRate = totalSessions > 0 ? Math.round((present / totalSessions) * 100) : null;
+
+    const assessments = await this.prisma.studentAssessment.findMany({
+      where: { studentId: id },
+      include: { assessment: { include: { subject: true } } },
+    });
+
+    const validScores = assessments.filter((a: any) => typeof a.score === 'number' && a.score !== null);
+    const avgScore =
+      validScores.length > 0
+        ? parseFloat((validScores.reduce((acc: number, a: any) => acc + (a.score || 0), 0) / validScores.length).toFixed(1))
+        : null;
+
+    const commentsCount = await this.prisma.studentComment.count({ where: { studentId: id } });
+
     return {
       student,
-      progress: [
-        { subject: 'Toán', score: 9.1, percentage: 91, trend: '+0.6', color: 'bg-teal-500' },
-        { subject: 'Tiếng Việt', score: 8.7, percentage: 87, trend: '+0.4', color: 'bg-blue-500' },
-        { subject: 'Khoa học', score: 8.9, percentage: 89, trend: '+0.8', color: 'bg-orange-500' },
-        { subject: 'Lịch sử & Địa lý', score: 8.2, percentage: 82, trend: '+0.2', color: 'bg-purple-500' },
-      ],
       stats: {
-        progress: student.progress,
-        attendance: student.attendance,
-        commentsCount: 12,
-        goals: '3/4',
+        attendanceRate,
+        totalSessions,
+        absences,
+        lates,
+        avgScore,
+        assessmentsCount: assessments.length,
+        commentsCount,
       },
-      latestNote: student.note,
     };
   }
 
@@ -303,9 +804,15 @@ export class StudentsService {
 
     const attendances = await this.prisma.studentAttendance.findMany({
       where: { studentId: id },
-      include: { attendanceSession: true },
+      include: {
+        attendanceSession: {
+          include: {
+            schedule: { include: { subject: true } },
+            teacher: true,
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
-      take: 20,
     });
 
     const statusMap: Record<string, string> = {
@@ -315,31 +822,76 @@ export class StudentsService {
       LATE: 'Đi muộn',
     };
 
-    if (!attendances.length) {
-      return [
-        { date: '20/08/2026', type: 'Có mặt', note: 'Đúng giờ' },
-        { date: '19/08/2026', type: 'Có mặt', note: 'Đúng giờ' },
-        { date: '18/08/2026', type: 'Đi muộn', note: 'Muộn 10 phút' },
-        { date: '17/08/2026', type: 'Có mặt', note: 'Đúng giờ' },
-      ];
-    }
+    const totalSessions = attendances.length;
+    const presentCount = attendances.filter((a: any) => a.status === 'PRESENT').length;
+    const excusedCount = attendances.filter((a: any) => a.status === 'EXCUSED_ABSENCE').length;
+    const unexcusedCount = attendances.filter((a: any) => a.status === 'UNEXCUSED_ABSENCE').length;
+    const lateCount = attendances.filter((a: any) => a.status === 'LATE').length;
+    const attendanceRate =
+      totalSessions > 0 ? Math.round(((presentCount + lateCount) / totalSessions) * 100) : null;
 
-    return attendances.map((a) => ({
-      date: new Date(a.attendanceSession.attendanceDate).toLocaleDateString('vi-VN'),
-      type: statusMap[a.status] || 'Có mặt',
-      note: a.note || (a.status === 'LATE' ? 'Đi muộn' : 'Đúng giờ'),
+    const sessions = attendances.map((a: any) => ({
+      id: a.id,
+      date: new Date(a.attendanceSession?.attendanceDate || a.createdAt).toLocaleDateString('vi-VN'),
+      subjectName: a.attendanceSession?.schedule?.subject?.name || 'Môn học',
+      teacherName: a.attendanceSession?.teacher?.fullName || 'Giáo viên',
+      period: a.attendanceSession?.schedule?.startTime ? `${a.attendanceSession.schedule.startTime} - ${a.attendanceSession.schedule.endTime}` : 'Tiết học',
+      status: a.status,
+      statusLabel: statusMap[a.status] || 'Có mặt',
+      lateMinutes: a.lateMinutes || 0,
+      note: a.note || (a.status === 'LATE' ? `Muộn ${a.lateMinutes} phút` : ''),
     }));
+
+    return {
+      summary: {
+        attendanceRate,
+        totalSessions,
+        presentCount,
+        excusedCount,
+        unexcusedCount,
+        lateCount,
+      },
+      sessions,
+    };
   }
 
   async getAssessments(id: string, teacherId: string) {
     await this.findOne(id, teacherId);
 
-    return [
-      { subject: 'Toán', score: 9.1, average: 9.1 },
-      { subject: 'Tiếng Việt', score: 8.7, average: 8.7 },
-      { subject: 'Khoa học', score: 8.9, average: 8.9 },
-      { subject: 'Lịch sử & Địa lý', score: 8.2, average: 8.2 },
-    ];
+    const assessments = await this.prisma.studentAssessment.findMany({
+      where: { studentId: id },
+      include: {
+        assessment: { include: { subject: true, classroom: true } },
+        criterion: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const validScores = assessments.filter((a: any) => typeof a.score === 'number' && a.score !== null);
+    const avgScore =
+      validScores.length > 0
+        ? parseFloat((validScores.reduce((acc: number, a: any) => acc + (a.score || 0), 0) / validScores.length).toFixed(1))
+        : null;
+
+    const items = assessments.map((a: any) => ({
+      id: a.id,
+      name: a.assessment?.title || 'Bài đánh giá',
+      subjectName: a.assessment?.subject?.name || 'Môn học',
+      className: a.assessment?.classroom?.name || '',
+      date: new Date(a.createdAt).toLocaleDateString('vi-VN'),
+      score: a.score,
+      level: a.level,
+      criterion: a.criterion?.name,
+      comment: a.comment,
+    }));
+
+    return {
+      summary: {
+        totalAssessments: assessments.length,
+        avgScore,
+      },
+      items,
+    };
   }
 
   async getComments(id: string, teacherId: string) {
@@ -347,16 +899,32 @@ export class StudentsService {
 
     const comments = await this.prisma.studentComment.findMany({
       where: { studentId: id },
-      include: { teacher: true },
+      include: { teacher: true, classroom: true },
       orderBy: { commentDate: 'desc' },
     });
 
-    return comments.map((c) => ({
+    return comments.map((c: any) => ({
       id: c.id,
       content: c.content,
       date: new Date(c.commentDate).toLocaleDateString('vi-VN'),
       teacherName: c.teacher?.fullName || 'Giáo viên',
+      className: c.classroom?.name,
     }));
+  }
+
+  async addComment(id: string, content: string, classroomId: string | undefined, teacherId: string) {
+    const student = await this.findOne(id, teacherId);
+
+    const targetClassId = classroomId || student.classId;
+
+    return this.prisma.studentComment.create({
+      data: {
+        studentId: id,
+        teacherId,
+        classroomId: targetClassId,
+        content: content.trim(),
+      },
+    });
   }
 
   async getEnrollments(id: string, teacherId?: string) {
@@ -374,12 +942,12 @@ export class StudentsService {
       ],
     });
 
-    return enrollments.map((e) => ({
+    return enrollments.map((e: any) => ({
       id: e.id,
       schoolYearId: e.schoolYearId,
       schoolYear: e.schoolYear ? { id: e.schoolYear.id, name: e.schoolYear.name, isCurrent: e.schoolYear.isCurrent } : undefined,
       classroomId: e.classroomId,
-      classroom: e.classroom ? { id: e.classroom.id, code: e.classroom.code, name: e.classroom.name, gradeName: e.classroom.grade?.name } : undefined,
+      classroom: e.classroom ? { id: e.classroom.id, code: e.classroom.code, name: e.classroom.name, gradeName: e.classroom.grade?.name, room: e.classroom.room } : undefined,
       status: e.status,
       enrolledAt: e.enrolledAt,
       leftAt: e.leftAt,
@@ -400,7 +968,8 @@ export class StudentsService {
       OTHER: 'Khác',
     };
 
-    const firstClass = s.classStudents?.[0]?.classroom;
+    const firstClassStudent = s.classStudents?.[0];
+    const firstClass = firstClassStudent?.classroom;
     const latestComment = s.comments?.[0]?.content || 'Chưa có nhận xét.';
 
     let studentAttendance: number | null = null;
@@ -411,19 +980,27 @@ export class StudentsService {
 
     return {
       id: s.id,
+      studentCode: s.studentCode || undefined,
       name: s.fullName,
+      fullName: s.fullName,
       initials: s.initials || s.fullName.slice(0, 2).toUpperCase(),
       gender: genderMap[s.gender] || 'Nam',
       dob: s.dobString || (s.dateOfBirth ? new Date(s.dateOfBirth).toLocaleDateString('vi-VN') : 'Chưa cập nhật'),
       guardian: s.parentName || 'Chưa cập nhật',
+      parentName: s.parentName || 'Chưa cập nhật',
       phone: s.parentPhone || 'Chưa cập nhật',
+      parentPhone: s.parentPhone || 'Chưa cập nhật',
       progress: s.status === 'EXCELLENT' ? 92 : s.status === 'GOOD' ? 84 : 70,
       status: statusMap[s.status] || 'Khá',
       attendance: studentAttendance,
       note: latestComment,
       color: s.avatarColor || 'bg-teal-100 text-teal-700',
-      className: firstClass?.name || 'Lớp 4A',
-      classId: firstClass?.id || '4a',
+      className: firstClass?.name || 'Chưa phân lớp',
+      classId: firstClass?.id || '',
+      gradeName: firstClass?.grade?.name,
+      schoolYearName: firstClass?.schoolYear?.name,
+      enrollmentId: s.studentEnrollments?.[0]?.id || firstClassStudent?.id,
+      enrolledAt: s.studentEnrollments?.[0]?.enrolledAt || firstClassStudent?.joinedAt,
     };
   }
 }

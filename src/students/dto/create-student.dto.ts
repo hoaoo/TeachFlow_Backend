@@ -7,6 +7,11 @@ export class CreateStudentDto {
   @IsNotEmpty({ message: 'Tên học sinh không được để trống' })
   fullName: string;
 
+  @ApiPropertyOptional({ example: 'HS001' })
+  @IsOptional()
+  @IsString()
+  studentCode?: string;
+
   @ApiPropertyOptional({ example: 'NA' })
   @IsOptional()
   @IsString()
@@ -41,6 +46,11 @@ export class CreateStudentDto {
   @IsOptional()
   @IsString()
   classId?: string;
+
+  @ApiPropertyOptional({ example: '4a' })
+  @IsOptional()
+  @IsString()
+  classroomId?: string;
 
   @ApiPropertyOptional({ example: 'bg-teal-100 text-teal-700' })
   @IsOptional()
