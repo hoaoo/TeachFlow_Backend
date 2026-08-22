@@ -33,16 +33,29 @@ export class StudentsService {
    */
   private async getTeacherAccessibleClassroomIds(teacherId: string): Promise<string[]> {
     try {
+      const teacherRecords = this.prisma.teacher?.findMany
+        ? await this.prisma.teacher.findMany({
+            where: {
+              OR: [
+                { id: teacherId },
+                { userId: teacherId },
+              ],
+            },
+            select: { id: true },
+          })
+        : [];
+      const validTeacherIds = Array.from(new Set<string>([teacherId, ...teacherRecords.map((t) => t.id)]));
+
       const [homeroomClasses, assignedClasses] = await Promise.all([
         this.prisma.classroom?.findMany
           ? this.prisma.classroom.findMany({
-              where: { teacherId, deletedAt: null },
+              where: { teacherId: { in: validTeacherIds }, deletedAt: null },
               select: { id: true },
             })
           : [],
         this.prisma.teachingAssignment?.findMany
           ? this.prisma.teachingAssignment.findMany({
-              where: { teacherId, isActive: true },
+              where: { teacherId: { in: validTeacherIds }, isActive: true },
               select: { classroomId: true },
             })
           : [],
@@ -75,10 +88,6 @@ export class StudentsService {
     } = query;
     const skip = (page - 1) * pageSize;
 
-    const where: any = {
-      deletedAt: null,
-    };
-
     // Anti-IDOR Scope: Teacher must have access to student's classroom
     let teacherClassIds: string[] = [];
     if (teacherId) {
@@ -100,36 +109,78 @@ export class StudentsService {
       }
     }
 
-    // Classroom scope condition
-    const classStudentConditions: any = {
-      status: 'ACTIVE',
-    };
-
-    if (teacherId) {
-      classStudentConditions.classroomId = { in: teacherClassIds };
-    }
-
+    // Determine target classroom IDs
+    let targetClassIds: string[] = teacherClassIds;
     if (classId && classId !== 'ALL' && classId !== 'Tất cả') {
-      classStudentConditions.classroomId = classId;
+      if (teacherId && teacherClassIds.length > 0) {
+        targetClassIds = teacherClassIds.includes(classId) ? [classId] : [];
+      } else {
+        targetClassIds = [classId];
+      }
+
+      if (targetClassIds.length === 0 && teacherId) {
+        return {
+          items: [],
+          totalItems: 0,
+          page,
+          pageSize,
+          totalPages: 0,
+          summary: {
+            totalStudents: 0,
+            activeStudents: 0,
+            needsSupportStudents: 0,
+            avgAttendanceRate: null,
+          },
+        };
+      }
     }
 
-    if (gradeId && gradeId !== 'ALL') {
-      classStudentConditions.classroom = {
-        ...(classStudentConditions.classroom || {}),
-        gradeId,
-      };
-    }
-
-    if (schoolYearId && schoolYearId !== 'ALL') {
-      classStudentConditions.classroom = {
-        ...(classStudentConditions.classroom || {}),
-        schoolYearId,
-      };
-    }
-
-    where.classStudents = {
-      some: classStudentConditions,
+    // Active enrollment condition on primary StudentEnrollment relation
+    const enrollmentCondition: any = {
+      status: 'ACTIVE',
+      classroom: {
+        deletedAt: null,
+      },
     };
+
+    if (targetClassIds.length > 0) {
+      enrollmentCondition.classroomId = { in: targetClassIds };
+    }
+
+    if (gradeId && gradeId !== 'ALL' && gradeId !== 'Tất cả') {
+      enrollmentCondition.classroom.gradeId = gradeId;
+    }
+
+    if (schoolYearId && schoolYearId !== 'ALL' && schoolYearId !== 'Tất cả') {
+      enrollmentCondition.classroom.schoolYearId = schoolYearId;
+    }
+
+    // Legacy ClassStudent compatibility condition
+    const classStudentCondition: any = {
+      status: 'ACTIVE',
+      classroom: {
+        deletedAt: null,
+      },
+    };
+    if (targetClassIds.length > 0) {
+      classStudentCondition.classroomId = { in: targetClassIds };
+    }
+    if (gradeId && gradeId !== 'ALL' && gradeId !== 'Tất cả') {
+      classStudentCondition.classroom.gradeId = gradeId;
+    }
+    if (schoolYearId && schoolYearId !== 'ALL' && schoolYearId !== 'Tất cả') {
+      classStudentCondition.classroom.schoolYearId = schoolYearId;
+    }
+
+    const andConditions: any[] = [
+      { deletedAt: null },
+      {
+        OR: [
+          { studentEnrollments: { some: enrollmentCondition } },
+          { classStudents: { some: classStudentCondition } },
+        ],
+      },
+    ];
 
     // Status filter
     if (status && status !== 'ALL' && status !== 'Tất cả') {
@@ -142,19 +193,23 @@ export class StudentsService {
         NEEDS_SUPPORT: 'NEEDS_SUPPORT',
       };
       const dbStatus = statusMap[status] || status;
-      where.status = dbStatus;
+      andConditions.push({ status: dbStatus });
     }
 
     // Search keyword
     if (keyword && keyword.trim()) {
       const kw = keyword.trim();
-      where.OR = [
-        { fullName: { contains: kw, mode: 'insensitive' } },
-        { studentCode: { contains: kw, mode: 'insensitive' } },
-        { parentName: { contains: kw, mode: 'insensitive' } },
-        { parentPhone: { contains: kw, mode: 'insensitive' } },
-      ];
+      andConditions.push({
+        OR: [
+          { fullName: { contains: kw, mode: 'insensitive' } },
+          { studentCode: { contains: kw, mode: 'insensitive' } },
+          { parentName: { contains: kw, mode: 'insensitive' } },
+          { parentPhone: { contains: kw, mode: 'insensitive' } },
+        ],
+      });
     }
+
+    const where = { AND: andConditions };
 
     // Sorting
     let orderBy: any = { fullName: 'asc' };
@@ -164,6 +219,33 @@ export class StudentsService {
       orderBy = { updatedAt: 'desc' };
     }
 
+    // Scope conditions for summary calculation
+    const scopeConditions: any[] = [
+      { deletedAt: null },
+      {
+        OR: [
+          {
+            studentEnrollments: {
+              some: {
+                status: 'ACTIVE',
+                classroom: { deletedAt: null },
+                ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
+              },
+            },
+          },
+          {
+            classStudents: {
+              some: {
+                status: 'ACTIVE',
+                classroom: { deletedAt: null },
+                ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
+              },
+            },
+          },
+        ],
+      },
+    ];
+
     const [totalItems, students, allScopeStudents] = await Promise.all([
       this.prisma.student.count({ where }),
       this.prisma.student.findMany({
@@ -171,8 +253,21 @@ export class StudentsService {
         skip,
         take: pageSize,
         include: {
+          studentEnrollments: {
+            where: {
+              status: 'ACTIVE',
+              classroom: { deletedAt: null },
+              ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
+            },
+            include: { classroom: { include: { grade: true, schoolYear: true } } },
+            orderBy: { enrolledAt: 'desc' },
+          },
           classStudents: {
-            where: { status: 'ACTIVE' },
+            where: {
+              status: 'ACTIVE',
+              classroom: { deletedAt: null },
+              ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
+            },
             include: { classroom: { include: { grade: true, schoolYear: true } } },
           },
           comments: {
@@ -187,10 +282,7 @@ export class StudentsService {
       }),
       // Aggregate summary across current scope
       this.prisma.student.findMany({
-        where: {
-          deletedAt: null,
-          ...(teacherId ? { classStudents: { some: { classroomId: { in: teacherClassIds }, status: 'ACTIVE' } } } : {}),
-        },
+        where: { AND: scopeConditions },
         select: {
           id: true,
           status: true,
@@ -283,9 +375,10 @@ export class StudentsService {
 
     // Anti-IDOR: Check teacher permission
     if (teacherId) {
-      const isHomeroom = (student.classStudents || []).some(
-        (cs: any) => cs.classroom && cs.classroom.teacherId === teacherId,
-      );
+      const isHomeroom = [
+        ...(student.classStudents || []).map((cs: any) => cs.classroom),
+        ...(student.studentEnrollments || []).map((se: any) => se.classroom),
+      ].some((c: any) => c && (c.teacherId === teacherId || c.teacher?.userId === teacherId));
 
       let hasAccess = isHomeroom;
       if (!hasAccess) {
@@ -968,8 +1061,8 @@ export class StudentsService {
       OTHER: 'Khác',
     };
 
-    const firstClassStudent = s.classStudents?.[0];
-    const firstClass = firstClassStudent?.classroom;
+    const activeEnrollment = s.studentEnrollments?.[0] || s.classStudents?.[0];
+    const activeClass = activeEnrollment?.classroom;
     const latestComment = s.comments?.[0]?.content || 'Chưa có nhận xét.';
 
     let studentAttendance: number | null = null;
@@ -995,12 +1088,12 @@ export class StudentsService {
       attendance: studentAttendance,
       note: latestComment,
       color: s.avatarColor || 'bg-teal-100 text-teal-700',
-      className: firstClass?.name || 'Chưa phân lớp',
-      classId: firstClass?.id || '',
-      gradeName: firstClass?.grade?.name,
-      schoolYearName: firstClass?.schoolYear?.name,
-      enrollmentId: s.studentEnrollments?.[0]?.id || firstClassStudent?.id,
-      enrolledAt: s.studentEnrollments?.[0]?.enrolledAt || firstClassStudent?.joinedAt,
+      className: activeClass?.name || 'Chưa phân lớp',
+      classId: activeClass?.id || '',
+      gradeName: activeClass?.grade?.name,
+      schoolYearName: activeClass?.schoolYear?.name,
+      enrollmentId: activeEnrollment?.id,
+      enrolledAt: activeEnrollment?.enrolledAt || activeEnrollment?.joinedAt,
     };
   }
 }

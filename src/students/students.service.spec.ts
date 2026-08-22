@@ -222,6 +222,49 @@ describe('StudentsService (Production Unit Tests)', () => {
       expect(res.summary.avgAttendanceRate).toBeNull();
       expect(res.items[0].attendance).toBeNull();
     });
+
+    it('filters by classroomId and handles ALL / Tất cả correctly without zeroing list', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([mockClass1G, mockClass1A]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValue([]);
+
+      mockPrisma.student.count.mockResolvedValue(1);
+      mockPrisma.student.findMany
+        .mockResolvedValueOnce([mockStudent1])
+        .mockResolvedValueOnce([{ id: 'student-1', status: 'EXCELLENT', studentAttendances: [] }]);
+
+      const resAll = await service.findAll({ classId: 'ALL', gradeId: 'ALL', status: 'ALL' }, 'teacher-a');
+      expect(resAll.items).toHaveLength(1);
+
+      mockPrisma.student.findMany
+        .mockResolvedValueOnce([mockStudent1])
+        .mockResolvedValueOnce([{ id: 'student-1', status: 'EXCELLENT', studentAttendances: [] }]);
+
+      const resFiltered = await service.findAll({ classId: 'class-1g', gradeId: 'grade-1', status: 'Tốt' }, 'teacher-a');
+      expect(resFiltered.items).toHaveLength(1);
+    });
+
+    it('deduplicates students having multiple historical enrollments and returns unique record', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([mockClass1G, mockClass1A]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValue([]);
+
+      const multiEnrollmentStudent = {
+        ...mockStudent1,
+        studentEnrollments: [
+          { id: 'se-2', classroomId: 'class-1g', status: 'ACTIVE', schoolYearId: 'sy-2026', classroom: mockClass1G },
+          { id: 'se-1', classroomId: 'class-1a', status: 'TRANSFERRED', schoolYearId: 'sy-2025', classroom: mockClass1A },
+        ],
+      };
+
+      mockPrisma.student.count.mockResolvedValue(1);
+      mockPrisma.student.findMany
+        .mockResolvedValueOnce([multiEnrollmentStudent])
+        .mockResolvedValueOnce([{ id: 'student-1', status: 'EXCELLENT', studentAttendances: [] }]);
+
+      const res = await service.findAll({}, 'teacher-a');
+      expect(res.items).toHaveLength(1);
+      expect(res.totalItems).toBe(1);
+      expect(res.items[0].id).toBe('student-1');
+    });
   });
 
   describe('findOne & Anti-IDOR Authorization', () => {
