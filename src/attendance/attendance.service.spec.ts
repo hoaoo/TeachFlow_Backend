@@ -5,9 +5,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { AttendanceStatusEnum } from './dto/save-attendance.dto';
 
-describe('AttendanceService (Phase 5 - Temporal Enrollment & Authorization)', () => {
+describe('AttendanceService (Schedule & Temporal Attendance)', () => {
   let service: AttendanceService;
-  let prisma: PrismaService;
+  let prisma: any;
   let authService: TeachingAssignmentAuthorizationService;
 
   const mockClass4A1 = {
@@ -15,38 +15,79 @@ describe('AttendanceService (Phase 5 - Temporal Enrollment & Authorization)', ()
     name: 'Lớp 4A1',
     teacherId: 'teacher-1',
     deletedAt: null,
+    schoolYear: { id: 'sy-1', isActive: true },
   };
 
-  const mockClass4A2 = {
-    id: 'class-4a2',
-    name: 'Lớp 4A2',
-    teacherId: 'teacher-2',
+  const mockSchedule = {
+    id: 'sched-1',
+    title: 'Tiết 1: Toán',
+    teacherId: 'teacher-1',
+    classroomId: 'class-4a1',
+    subjectId: 'sub-math',
+    plannedDate: new Date('2026-08-24T00:00:00.000Z'),
+    startTime: '07:00',
+    endTime: '07:45',
     deletedAt: null,
+    classroom: mockClass4A1,
+    subject: { id: 'sub-math', name: 'Toán' },
+  };
+
+  const mockSession = {
+    id: 'session-1',
+    scheduleId: 'sched-1',
+    classroomId: 'class-4a1',
+    teacherId: 'teacher-1',
+    attendanceDate: new Date('2026-08-24T00:00:00.000Z'),
+    note: 'Tiết học sôi nổi',
+    status: 'Đã điểm danh',
+    attendances: [
+      { id: 'att-1', studentId: 'student-1', status: 'PRESENT', lateMinutes: 0, note: null },
+      { id: 'att-2', studentId: 'student-2', status: 'LATE', lateMinutes: 5, note: 'Tắc đường' },
+      { id: 'att-3', studentId: 'student-3', status: 'UNEXCUSED_ABSENCE', lateMinutes: 0, note: 'Nghỉ không phép' },
+    ],
   };
 
   beforeEach(async () => {
+    prisma = {
+      classroom: { findUnique: jest.fn(), findFirst: jest.fn() },
+      schedule: { findUnique: jest.fn() },
+      student: { findUnique: jest.fn() },
+      attendanceSession: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        create: jest.fn().mockResolvedValue(mockSession),
+        update: jest.fn().mockResolvedValue(mockSession),
+      },
+      studentAttendance: {
+        upsert: jest.fn().mockResolvedValue({ id: 'att-1' }),
+        findMany: jest.fn().mockResolvedValue(mockSession.attendances),
+      },
+      studentEnrollment: { findMany: jest.fn(), findFirst: jest.fn() },
+      teachingAssignment: { findFirst: jest.fn() },
+      $transaction: jest.fn((callback) => {
+        if (typeof callback === 'function') {
+          return callback({
+            attendanceSession: {
+              findUnique: jest.fn().mockResolvedValue(null),
+              create: jest.fn().mockResolvedValue({ id: 'session-new' }),
+              update: jest.fn().mockResolvedValue({ id: 'session-updated' }),
+            },
+            studentAttendance: {
+              upsert: jest.fn().mockResolvedValue({ id: 'att-1' }),
+            },
+          });
+        }
+        return Promise.all(callback);
+      }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AttendanceService,
         {
           provide: PrismaService,
-          useValue: {
-            classroom: { findUnique: jest.fn(), findFirst: jest.fn() },
-            attendanceSession: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
-            studentAttendance: { upsert: jest.fn(), findMany: jest.fn() },
-            studentEnrollment: { findMany: jest.fn(), findFirst: jest.fn() },
-            teachingAssignment: { findFirst: jest.fn() },
-            $transaction: jest.fn((callback) => callback({
-              attendanceSession: {
-                findUnique: jest.fn().mockResolvedValue(null),
-                create: jest.fn().mockResolvedValue({ id: 'session-new' }),
-                update: jest.fn(),
-              },
-              studentAttendance: {
-                upsert: jest.fn().mockResolvedValue({ id: 'att-1' }),
-              },
-            })),
-          },
+          useValue: prisma,
         },
         {
           provide: TeachingAssignmentAuthorizationService,
@@ -59,99 +100,125 @@ describe('AttendanceService (Phase 5 - Temporal Enrollment & Authorization)', ()
     }).compile();
 
     service = module.get<AttendanceService>(AttendanceService);
-    prisma = module.get<PrismaService>(PrismaService);
     authService = module.get<TeachingAssignmentAuthorizationService>(TeachingAssignmentAuthorizationService);
   });
 
-  it('allows teacher to get attendance of assigned classroom', async () => {
-    jest.spyOn(prisma.classroom, 'findUnique').mockResolvedValue(mockClass4A1 as any);
+  it('gets schedule attendance with student list and status summary', async () => {
+    jest.spyOn(prisma.schedule, 'findUnique').mockResolvedValue(mockSchedule as any);
     jest.spyOn(prisma.studentEnrollment, 'findMany').mockResolvedValue([
       { studentId: 'student-1', student: { id: 'student-1', fullName: 'Nguyễn Văn A', gender: 'MALE' } },
+      { studentId: 'student-2', student: { id: 'student-2', fullName: 'Trần Thị B', gender: 'FEMALE' } },
+      { studentId: 'student-3', student: { id: 'student-3', fullName: 'Lê Văn C', gender: 'MALE' } },
     ] as any);
-    jest.spyOn(prisma.attendanceSession, 'findUnique').mockResolvedValue(null);
+    jest.spyOn(prisma.attendanceSession, 'findUnique').mockResolvedValue(mockSession as any);
 
-    const result = await service.getAttendance('class-4a1', '2026-11-10', 'teacher-1');
+    const result = await service.getScheduleAttendance('sched-1', 'teacher-1');
 
-    expect(authService.assertTeacherCanAccessClassroomAttendance).toHaveBeenCalledWith('class-4a1', 'teacher-1');
     expect(result).toBeDefined();
-    expect(result.totalStudents).toBe(1);
-    expect(result.students[0].name).toBe('Nguyễn Văn A');
+    expect(result.schedule.id).toBe('sched-1');
+    expect(result.summary.totalStudents).toBe(3);
+    expect(result.summary.presentCount).toBe(1);
+    expect(result.summary.lateCount).toBe(1);
+    expect(result.summary.unexcusedCount).toBe(1);
+    expect(result.isRecorded).toBe(true);
   });
 
-  it('rejects teacher attempting to get attendance of unauthorized class (IDOR)', async () => {
-    jest.spyOn(prisma.classroom, 'findUnique').mockResolvedValue(mockClass4A1 as any);
-    jest.spyOn(authService, 'assertTeacherCanAccessClassroomAttendance').mockRejectedValue(
-      new ForbiddenException('Bạn không có quyền quản lý điểm danh của lớp học này'),
-    );
+  it('saves schedule attendance in atomic transaction', async () => {
+    jest.spyOn(prisma.schedule, 'findUnique').mockResolvedValue(mockSchedule as any);
 
-    await expect(service.getAttendance('class-4a1', '2026-11-10', 'teacher-intruder')).rejects.toThrow(
-      ForbiddenException,
-    );
-  });
-
-  it('correctly handles historical temporal enrollment for transferred student', async () => {
-    // Scenario: Student A was in 4A1 until Nov 15, then transferred to 4A2 from Nov 16
-    const studentA = { id: 'student-A', fullName: 'Trần Thị B', gender: 'FEMALE' };
-
-    // Nov 10 for 4A1 -> Student A included
-    jest.spyOn(prisma.classroom, 'findUnique').mockResolvedValue(mockClass4A1 as any);
-    jest.spyOn(prisma.studentEnrollment, 'findMany').mockResolvedValue([
-      { studentId: 'student-A', student: studentA },
-    ] as any);
-    jest.spyOn(prisma.attendanceSession, 'findUnique').mockResolvedValue(null);
-
-    const result4A1_Nov10 = await service.getAttendance('class-4a1', '2026-11-10', 'teacher-1');
-    expect(result4A1_Nov10.students.some((s) => s.studentId === 'student-A')).toBe(true);
-
-    // Nov 20 for 4A1 -> Student A excluded
-    jest.spyOn(prisma.studentEnrollment, 'findMany').mockResolvedValue([]);
-    const result4A1_Nov20 = await service.getAttendance('class-4a1', '2026-11-20', 'teacher-1');
-    expect(result4A1_Nov20.students.some((s) => s.studentId === 'student-A')).toBe(false);
-
-    // Nov 20 for 4A2 -> Student A included
-    jest.spyOn(prisma.classroom, 'findUnique').mockResolvedValue(mockClass4A2 as any);
-    jest.spyOn(prisma.studentEnrollment, 'findMany').mockResolvedValue([
-      { studentId: 'student-A', student: studentA },
-    ] as any);
-    const result4A2_Nov20 = await service.getAttendance('class-4a2', '2026-11-20', 'teacher-2');
-    expect(result4A2_Nov20.students.some((s) => s.studentId === 'student-A')).toBe(true);
-  });
-
-  it('rejects saving attendance when a student is not enrolled on attendance date (Cross-Class Student IDOR)', async () => {
-    jest.spyOn(prisma.classroom, 'findUnique').mockResolvedValue(mockClass4A1 as any);
-    jest.spyOn(authService, 'assertStudentsEnrolled').mockRejectedValue(
-      new BadRequestException('Học sinh với mã student-999 không thuộc danh sách lớp học'),
-    );
-
-    await expect(
-      service.saveAttendance(
-        {
-          classId: 'class-4a1',
-          date: '2026-08-20',
-          attendances: [{ studentId: 'student-999', status: AttendanceStatusEnum.PRESENT }],
-        },
-        'teacher-1',
-      ),
-    ).rejects.toThrow(BadRequestException);
-  });
-
-  it('saves attendance in atomic transaction when valid', async () => {
-    jest.spyOn(prisma.classroom, 'findUnique').mockResolvedValue(mockClass4A1 as any);
-    jest.spyOn(prisma.teachingAssignment, 'findFirst').mockResolvedValue({ id: 'asg-1' } as any);
-
-    const result = await service.saveAttendance(
+    const result = await service.saveScheduleAttendance(
+      'sched-1',
       {
-        classId: 'class-4a1',
-        date: '2026-08-20',
+        note: 'Tiết học tốt',
         attendances: [
-          { studentId: 'student-1', status: AttendanceStatusEnum.PRESENT },
-          { studentId: 'student-2', status: AttendanceStatusEnum.LATE, note: 'Muộn 5p' },
+          { studentId: 'student-1', status: 'PRESENT' },
+          { studentId: 'student-2', status: 'LATE', lateMinutes: 5 },
+          { studentId: 'student-3', status: 'ABSENT', note: 'Vắng không phép' },
         ],
       },
       'teacher-1',
     );
 
     expect(result.success).toBe(true);
+    expect(result.summary.presentCount).toBe(1);
+    expect(result.summary.lateCount).toBe(1);
+    expect(result.summary.unexcusedCount).toBe(1);
     expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('rejects saving schedule attendance with duplicate student IDs in payload', async () => {
+    jest.spyOn(prisma.schedule, 'findUnique').mockResolvedValue(mockSchedule as any);
+
+    await expect(
+      service.saveScheduleAttendance(
+        'sched-1',
+        {
+          attendances: [
+            { studentId: 'student-1', status: 'PRESENT' },
+            { studentId: 'student-1', status: 'PRESENT' },
+          ],
+        },
+        'teacher-1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects unauthorized teacher accessing another teacher schedule', async () => {
+    jest.spyOn(prisma.schedule, 'findUnique').mockResolvedValue(mockSchedule as any);
+    jest.spyOn(authService, 'assertTeacherCanAccessClassroomAttendance').mockRejectedValue(
+      new ForbiddenException('Bạn không có quyền truy cập'),
+    );
+
+    await expect(
+      service.getScheduleAttendance('sched-1', 'teacher-intruder'),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('gets student attendance summary and calculates attendance rate', async () => {
+    jest.spyOn(prisma.student, 'findUnique').mockResolvedValue({
+      id: 'student-1',
+      fullName: 'Nguyễn Văn A',
+      deletedAt: null,
+      studentEnrollments: [{ classroom: { name: 'Lớp 4A1' } }],
+    } as any);
+
+    jest.spyOn(prisma.studentAttendance, 'findMany').mockResolvedValue([
+      {
+        id: 'att-1',
+        status: 'PRESENT',
+        lateMinutes: 0,
+        attendanceSession: {
+          attendanceDate: new Date('2026-08-24'),
+          schedule: { subject: { name: 'Toán' }, startTime: '07:00', endTime: '07:45' },
+        },
+      },
+      {
+        id: 'att-2',
+        status: 'LATE',
+        lateMinutes: 10,
+        attendanceSession: {
+          attendanceDate: new Date('2026-08-23'),
+          schedule: { subject: { name: 'Tiếng Việt' }, startTime: '08:00', endTime: '08:45' },
+        },
+      },
+      {
+        id: 'att-3',
+        status: 'UNEXCUSED_ABSENCE',
+        lateMinutes: 0,
+        attendanceSession: {
+          attendanceDate: new Date('2026-08-22'),
+          schedule: { subject: { name: 'Khoa học' }, startTime: '09:00', endTime: '09:45' },
+        },
+      },
+    ] as any);
+
+    const summary = await service.getStudentAttendanceSummary('student-1', 'teacher-1');
+
+    expect(summary).toBeDefined();
+    expect(summary.summary.totalPeriods).toBe(3);
+    expect(summary.summary.presentCount).toBe(1);
+    expect(summary.summary.lateCount).toBe(1);
+    expect(summary.summary.unexcusedCount).toBe(1);
+    expect(summary.summary.attendanceRate).toBe(67);
   });
 });

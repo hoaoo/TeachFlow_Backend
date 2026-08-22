@@ -134,6 +134,11 @@ export class SchedulesService {
         classroom: { include: { grade: true } },
         subject: true,
         schoolYear: true,
+        attendanceSession: {
+          include: {
+            attendances: true,
+          },
+        },
         lessonPlan: {
           select: {
             id: true,
@@ -160,6 +165,11 @@ export class SchedulesService {
         classroom: { include: { grade: true } },
         subject: true,
         schoolYear: true,
+        attendanceSession: {
+          include: {
+            attendances: true,
+          },
+        },
         lessonPlan: {
           select: {
             id: true,
@@ -180,21 +190,21 @@ export class SchedulesService {
       throw new ForbiddenException('Bạn không có quyền truy cập lịch dạy này');
     }
 
-    // Check attendance status for this schedule's classroom and date
+    // Check attendance status for this schedule
     const targetDate = new Date(schedule.plannedDate);
     targetDate.setHours(0, 0, 0, 0);
 
-    const attendanceSession = await this.prisma.attendanceSession.findUnique({
+    const attendanceSession = schedule.attendanceSession || (await this.prisma.attendanceSession.findFirst({
       where: {
-        classroomId_attendanceDate: {
-          classroomId: schedule.classroomId,
-          attendanceDate: targetDate,
-        },
+        OR: [
+          { scheduleId: id },
+          { classroomId: schedule.classroomId, attendanceDate: targetDate },
+        ],
       },
       include: {
         attendances: true,
       },
-    });
+    }));
 
     const mapped = this.mapSchedule(schedule);
     return {
@@ -859,12 +869,12 @@ export class SchedulesService {
     const targetDate = new Date(schedule.plannedDate);
     targetDate.setHours(0, 0, 0, 0);
 
-    const session = await this.prisma.attendanceSession.findUnique({
+    const session = await this.prisma.attendanceSession.findFirst({
       where: {
-        classroomId_attendanceDate: {
-          classroomId: schedule.classroomId,
-          attendanceDate: targetDate,
-        },
+        OR: [
+          { scheduleId: id },
+          { classroomId: schedule.classroomId, attendanceDate: targetDate },
+        ],
       },
       include: {
         attendances: true,
@@ -898,6 +908,12 @@ export class SchedulesService {
   }
 
   private mapSchedule(s: any) {
+    const hasAttendance = !!s.attendanceSession;
+    const attendances = s.attendanceSession?.attendances || [];
+    const presentCount = attendances.filter((a: any) => a.status === 'PRESENT').length;
+    const absentCount = attendances.filter((a: any) => a.status === 'EXCUSED_ABSENCE' || a.status === 'UNEXCUSED_ABSENCE').length;
+    const lateCount = attendances.filter((a: any) => a.status === 'LATE').length;
+
     return {
       id: s.id,
       teacherId: s.teacherId,
@@ -947,6 +963,25 @@ export class SchedulesService {
             objectives: s.lessonPlan.objectives || null,
           }
         : null,
+      attendance: hasAttendance
+        ? {
+            id: s.attendanceSession.id,
+            isRecorded: true,
+            status: s.attendanceSession.status || 'Đã điểm danh',
+            totalStudents: attendances.length,
+            presentCount,
+            absentCount,
+            lateCount,
+          }
+        : {
+            id: null,
+            isRecorded: false,
+            status: 'Chưa điểm danh',
+            totalStudents: 0,
+            presentCount: 0,
+            absentCount: 0,
+            lateCount: 0,
+          },
       recurrenceGroupId: s.recurrenceGroupId || null,
       recurrenceType: s.recurrenceType || 'NONE',
       recurrenceEndDate: s.recurrenceEndDate

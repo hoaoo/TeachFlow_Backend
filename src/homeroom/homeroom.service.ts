@@ -124,12 +124,10 @@ export class HomeroomService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const sessionToday = await this.prisma.attendanceSession.findUnique({
+    const sessionToday = await this.prisma.attendanceSession.findFirst({
       where: {
-        classroomId_attendanceDate: {
-          classroomId,
-          attendanceDate: today,
-        },
+        classroomId,
+        attendanceDate: today,
       },
       include: {
         attendances: true,

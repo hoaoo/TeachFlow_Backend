@@ -380,6 +380,14 @@ export class DashboardService {
       include: {
         classroom: { include: { grade: true } },
         subject: true,
+        attendanceSession: {
+          include: {
+            attendances: true,
+          },
+        },
+        lessonPlan: {
+          select: { id: true, title: true },
+        },
       },
       orderBy: [
         { plannedDate: 'asc' },
@@ -387,20 +395,37 @@ export class DashboardService {
       ],
     });
 
-    return schedules.map((s, i) => ({
-      id: s.id,
-      time: s.startTime && s.endTime ? `${s.startTime} - ${s.endTime}` : s.startTime || '07:30',
-      startTime: s.startTime || '07:00',
-      endTime: s.endTime || '07:45',
-      plannedDate: s.plannedDate ? s.plannedDate.toISOString().split('T')[0] : null,
-      status: s.status || 'PLANNED',
-      isManualStatus: Boolean(s.isManualStatus),
-      subject: s.subject?.name || 'Môn học',
-      title: s.title || `Tiết học ${i + 1}`,
-      className: s.classroom?.name || 'Lớp',
-      gradeName: s.classroom?.grade?.name || null,
-      room: s.room || s.classroom?.room || 'Phòng học',
-      color: i % 3 === 0 ? 'teal' : i % 3 === 1 ? 'orange' : 'blue',
-    }));
+    return schedules.map((s, i) => {
+      const hasAttendance = !!s.attendanceSession;
+      const totalStudents = s.attendanceSession?.attendances.length || 0;
+      const presentStudents = s.attendanceSession?.attendances.filter((a) => a.status === 'PRESENT').length || 0;
+      const attendanceLabel = hasAttendance
+        ? `${presentStudents}/${totalStudents}`
+        : 'Chưa điểm danh';
+
+      return {
+        id: s.id,
+        time: s.startTime && s.endTime ? `${s.startTime} - ${s.endTime}` : s.startTime || '07:30',
+        startTime: s.startTime || '07:00',
+        endTime: s.endTime || '07:45',
+        plannedDate: s.plannedDate ? s.plannedDate.toISOString().split('T')[0] : null,
+        status: s.status || 'PLANNED',
+        isManualStatus: Boolean(s.isManualStatus),
+        subject: s.subject?.name || 'Môn học',
+        title: s.title || `Tiết học ${i + 1}`,
+        className: s.classroom?.name || 'Lớp',
+        classroomId: s.classroomId,
+        gradeName: s.classroom?.grade?.name || null,
+        room: s.room || s.classroom?.room || 'Phòng học',
+        hasLessonPlan: !!s.lessonPlanId,
+        lessonPlanId: s.lessonPlanId || null,
+        lessonPlanTitle: s.lessonPlan?.title || null,
+        attendanceRecorded: hasAttendance,
+        attendanceLabel,
+        attendancePresentCount: presentStudents,
+        attendanceTotalCount: totalStudents,
+        color: i % 3 === 0 ? 'teal' : i % 3 === 1 ? 'orange' : 'blue',
+      };
+    });
   }
 }

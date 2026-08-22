@@ -395,6 +395,7 @@ model Schedule {
   classroom  Classroom   @relation(fields: [classroomId], references: [id])
   subject    Subject     @relation(fields: [subjectId], references: [id])
   lessonPlan LessonPlan? @relation(fields: [lessonPlanId], references: [id], onDelete: SetNull)
+  attendanceSession AttendanceSession?
 
   @@index([teacherId, plannedDate])
   @@index([classroomId, plannedDate])
@@ -599,6 +600,7 @@ model WorksheetQuestion {
 
 model AttendanceSession {
   id                   String    @id @default(uuid())
+  scheduleId           String?   @unique
   classroomId          String
   teacherId            String
   teachingAssignmentId String?
@@ -606,17 +608,23 @@ model AttendanceSession {
   sessionPeriod        String?   @default("MORNING")
   title                String?
   status               String?   @default("COMPLETED")
+  note                 String?   @db.Text
   meta                 String?
   tone                 String?   @default("teal")
+  startedAt            DateTime?
+  completedAt          DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  schedule           Schedule?           @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   classroom          Classroom           @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   teacher            Teacher             @relation(fields: [teacherId], references: [id])
   teachingAssignment TeachingAssignment? @relation(fields: [teachingAssignmentId], references: [id], onDelete: SetNull)
   attendances        StudentAttendance[]
 
-  @@unique([classroomId, attendanceDate])
+  @@index([scheduleId])
+  @@index([classroomId, attendanceDate])
+  @@index([teacherId, attendanceDate])
   @@index([teachingAssignmentId])
 }
 
@@ -625,6 +633,7 @@ model StudentAttendance {
   attendanceSessionId String
   studentId           String
   status              AttendanceStatus @default(PRESENT)
+  lateMinutes         Int?             @default(0)
   note                String?
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
@@ -633,6 +642,8 @@ model StudentAttendance {
   student           Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([attendanceSessionId, studentId])
+  @@index([studentId, status])
+  @@index([attendanceSessionId])
 }
 
 model Assessment {
