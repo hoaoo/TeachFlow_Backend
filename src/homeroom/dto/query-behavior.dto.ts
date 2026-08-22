@@ -29,6 +29,11 @@ export class QueryBehaviorDto {
   @IsEnum(BehaviorCategory)
   category?: BehaviorCategory;
 
+  @ApiPropertyOptional({ description: 'Lọc theo loại sự kiện cụ thể' })
+  @IsOptional()
+  @IsString()
+  behaviorType?: string;
+
   @ApiPropertyOptional({ enum: BehaviorLevel, description: 'Lọc theo mức độ' })
   @IsOptional()
   @IsEnum(BehaviorLevel)

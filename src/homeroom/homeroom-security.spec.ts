@@ -25,6 +25,11 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       findUnique: jest.fn(),
       findMany: jest.fn(),
     },
+    studentEnrollment: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
+    },
     studentBehaviorRecord: {
       findUnique: jest.fn(),
       create: jest.fn(),

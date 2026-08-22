@@ -1,5 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsInt, Min, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsInt, Min, IsOptional, IsArray, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class WeeklyStudentCommentDto {
+  @IsString()
+  @IsNotEmpty()
+  studentId: string;
+
+  @IsOptional() @IsString() learning?: string;
+  @IsOptional() @IsString() behavior?: string;
+  @IsOptional() @IsString() attendance?: string;
+  @IsOptional() @IsString() comment?: string;
+}
 
 export class SaveWeeklyReviewDto {
   @ApiProperty({ description: 'Mã lớp học' })
@@ -32,6 +44,18 @@ export class SaveWeeklyReviewDto {
   @IsOptional()
   @IsString()
   nextWeekPlan?: string;
+
+  @ApiPropertyOptional({ description: 'Học sinh nổi bật' })
+  @IsOptional() @IsString()
+  notableStudents?: string;
+
+  @ApiPropertyOptional({ description: 'Học sinh cần hỗ trợ' })
+  @IsOptional() @IsString()
+  supportStudents?: string;
+
+  @ApiPropertyOptional({ type: [WeeklyStudentCommentDto] })
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => WeeklyStudentCommentDto)
+  studentComments?: WeeklyStudentCommentDto[];
 
   @ApiPropertyOptional({ description: 'Phiên bản để kiểm soát optimistic concurrency', default: 1 })
   @IsOptional()

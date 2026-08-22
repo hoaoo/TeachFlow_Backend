@@ -4,6 +4,8 @@ import {
   ForbiddenException,
   ConflictException,
   Logger,
+  BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HOMEROOM_RULES } from './homeroom.constants';
@@ -18,6 +20,10 @@ import {
   MonthlySummaryExportData,
 } from '../export/homeroom-export.service';
 import { sanitizeFilename } from '../export/export.utils';
+import { AuditService } from '../common/audit/audit.service';
+import { CreateHomeroomTaskDto, UpdateHomeroomTaskDto } from './dto/homeroom-task.dto';
+import { CreateParentContactDto } from './dto/parent-contact.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class HomeroomService {
@@ -26,7 +32,43 @@ export class HomeroomService {
   constructor(
     private prisma: PrismaService,
     private homeroomExportService: HomeroomExportService,
+    @Optional() private auditService?: AuditService,
   ) {}
+
+  private dateOnly(value: string | Date) {
+    let raw: string;
+    if (typeof value === 'string') {
+      raw = value.slice(0, 10);
+    } else {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(value);
+      const part = (type: Intl.DateTimeFormatPartTypes) =>
+        parts.find((item) => item.type === type)?.value;
+      raw = `${part('year')}-${part('month')}-${part('day')}`;
+    }
+    return new Date(`${raw}T00:00:00.000Z`);
+  }
+
+  async getMyHomerooms(teacherId: string) {
+    const classrooms = await this.prisma.classroom.findMany({
+      where: { teacherId, deletedAt: null, isActive: true },
+      include: { grade: true, schoolYear: true },
+      orderBy: [{ schoolYear: { startDate: 'desc' } }, { name: 'asc' }],
+    });
+
+    return classrooms.map((classroom) => ({
+      id: classroom.id,
+      code: classroom.code,
+      name: classroom.name,
+      gradeName: classroom.grade.name,
+      schoolYearId: classroom.schoolYearId,
+      schoolYearName: classroom.schoolYear.name,
+    }));
+  }
 
   /**
    * Validate Classroom exists, not deleted, and belongs to currentTeacherId
@@ -66,16 +108,11 @@ export class HomeroomService {
       throw new NotFoundException('Không tìm thấy học sinh');
     }
 
-    const classStudent = await this.prisma.classStudent.findUnique({
-      where: {
-        classroomId_studentId: {
-          classroomId,
-          studentId,
-        },
-      },
+    const enrollment = await this.prisma.studentEnrollment.findFirst({
+      where: { classroomId, studentId, status: 'ACTIVE' },
     });
 
-    if (!classStudent || classStudent.status !== 'ACTIVE') {
+    if (!enrollment) {
       throw new ForbiddenException('Học sinh không thuộc lớp học này hoặc đã thôi học');
     }
 
@@ -89,8 +126,8 @@ export class HomeroomService {
     let classroomId = classId;
     if (!classroomId) {
       const firstClass = await this.prisma.classroom.findFirst({
-        where: { teacherId, deletedAt: null },
-        orderBy: { name: 'asc' },
+        where: { teacherId, deletedAt: null, isActive: true },
+        orderBy: [{ schoolYear: { startDate: 'desc' } }, { name: 'asc' }],
       });
       if (!firstClass) {
         return {
@@ -116,15 +153,14 @@ export class HomeroomService {
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
 
     // Active students count
-    const studentCount = await this.prisma.classStudent.count({
+    const studentCount = await this.prisma.studentEnrollment.count({
       where: { classroomId, status: 'ACTIVE', student: { deletedAt: null } },
     });
 
     // Attendance Today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = this.dateOnly(new Date());
 
-    const sessionToday = await this.prisma.attendanceSession.findFirst({
+    const sessionsToday = await this.prisma.attendanceSession.findMany({
       where: {
         classroomId,
         attendanceDate: today,
@@ -134,9 +170,10 @@ export class HomeroomService {
       },
     });
 
-    const attendances = sessionToday?.attendances || [];
+    const attendances = sessionsToday.flatMap((session) => session.attendances);
     const attendanceToday = {
-      isRecorded: !!sessionToday,
+      isRecorded: sessionsToday.length > 0,
+      sessionCount: sessionsToday.length,
       total: studentCount,
       present: attendances.filter((a) => a.status === 'PRESENT').length,
       excusedAbsence: attendances.filter((a) => a.status === 'EXCUSED_ABSENCE').length,
@@ -150,7 +187,7 @@ export class HomeroomService {
 
     // Recent behavior records (top 5)
     const recentBehavior = await this.prisma.studentBehaviorRecord.findMany({
-      where: { classroomId, teacherId },
+      where: { classroomId },
       include: {
         student: { select: { id: true, fullName: true, avatarColor: true, initials: true } },
       },
@@ -160,8 +197,8 @@ export class HomeroomService {
 
     // Weekly tasks
     const tasks = await this.prisma.teacherTask.findMany({
-      where: { teacherId },
-      orderBy: { createdAt: 'asc' },
+      where: { teacherId, classroomId },
+      orderBy: [{ done: 'asc' }, { dueDate: 'asc' }],
       take: 5,
     });
 
@@ -175,12 +212,12 @@ export class HomeroomService {
       classroom: {
         id: classroom.id,
         name: classroom.name,
-        room: classroom.room || 'Phòng học',
-        schedule: classroom.schedule || 'Cả ngày',
+        room: classroom.room,
+        schedule: classroom.schedule,
         accent: classroom.accent || 'teal',
         studentCount,
-        gradeName: classroom.grade?.name || 'Khối 4',
-        schoolYearName: classroom.schoolYear?.name || '2026 - 2027',
+        gradeName: classroom.grade?.name ?? null,
+        schoolYearName: classroom.schoolYear?.name ?? null,
         schoolYearId: classroom.schoolYearId,
       },
       attendanceToday,
@@ -200,8 +237,10 @@ export class HomeroomService {
       weeklyTasks: tasks.map((t) => ({
         id: t.id,
         title: t.title,
-        due: t.dueDate || 'Tuần này',
+        due: t.dueDate,
         done: t.done,
+        status: t.status,
+        priority: t.priority,
       })),
       currentWeekReview: currentWeekReview
         ? {
@@ -227,7 +266,7 @@ export class HomeroomService {
     windowStart.setDate(windowStart.getDate() - HOMEROOM_RULES.ATTENTION_WINDOW_DAYS);
     windowStart.setHours(0, 0, 0, 0);
 
-    const classStudents = await this.prisma.classStudent.findMany({
+    const classStudents = await this.prisma.studentEnrollment.findMany({
       where: {
         classroomId,
         status: 'ACTIVE',
@@ -238,10 +277,10 @@ export class HomeroomService {
           include: {
             studentAttendances: {
               where: {
-                createdAt: { gte: windowStart },
-              },
-              include: {
-                attendanceSession: true,
+                attendanceSession: {
+                  classroomId,
+                  attendanceDate: { gte: windowStart },
+                },
               },
             },
             behaviorRecords: {
@@ -340,9 +379,12 @@ export class HomeroomService {
    * Handles leap year (Feb 29) & year-end boundary (Dec -> Jan)
    */
   async getUpcomingBirthdays(classroomId: string, teacherId: string, days = 30) {
+    if (!Number.isInteger(days) || days < 1 || days > 366) {
+      throw new BadRequestException('Số ngày tra cứu sinh nhật phải từ 1 đến 366');
+    }
     await this.validateClassroomOwnership(classroomId, teacherId);
 
-    const classStudents = await this.prisma.classStudent.findMany({
+    const classStudents = await this.prisma.studentEnrollment.findMany({
       where: {
         classroomId,
         status: 'ACTIVE',
@@ -447,6 +489,10 @@ export class HomeroomService {
       where.category = query.category;
     }
 
+    if (query.behaviorType) {
+      where.behaviorType = query.behaviorType;
+    }
+
     if (query.level) {
       where.level = query.level;
     }
@@ -503,8 +549,11 @@ export class HomeroomService {
         studentColor: r.student.avatarColor,
         recordDate: r.recordDate.toISOString().split('T')[0],
         category: r.category,
+        behaviorType: r.behaviorType,
         level: r.level,
         content: r.content,
+        resolution: r.resolution,
+        note: r.note,
         createdAt: r.createdAt,
       })),
       total,
@@ -525,8 +574,11 @@ export class HomeroomService {
         teacherId,
         recordDate: new Date(dto.recordDate),
         category: dto.category,
+        behaviorType: dto.behaviorType?.trim() || null,
         level: dto.level,
         content: dto.content,
+        resolution: dto.resolution?.trim() || null,
+        note: dto.note?.trim() || null,
       },
       include: {
         student: { select: { id: true, fullName: true, initials: true, avatarColor: true } },
@@ -534,7 +586,7 @@ export class HomeroomService {
       },
     });
 
-    return {
+    const response = {
       id: record.id,
       classroomId: record.classroomId,
       className: record.classroom.name,
@@ -544,10 +596,23 @@ export class HomeroomService {
       studentColor: record.student.avatarColor,
       recordDate: record.recordDate.toISOString().split('T')[0],
       category: record.category,
+      behaviorType: record.behaviorType,
       level: record.level,
       content: record.content,
+      resolution: record.resolution,
+      note: record.note,
       createdAt: record.createdAt,
     };
+
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'HOMEROOM_BEHAVIOR_CREATE',
+      resourceType: 'StudentBehaviorRecord',
+      resourceId: record.id,
+      details: { classroomId: dto.classroomId, studentId: dto.studentId, category: dto.category, level: dto.level },
+    });
+
+    return response;
   }
 
   async updateBehaviorRecord(id: string, dto: UpdateBehaviorRecordDto, teacherId: string) {
@@ -562,14 +627,18 @@ export class HomeroomService {
     if (existing.teacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền chỉnh sửa bản ghi này');
     }
+    await this.validateClassroomOwnership(existing.classroomId, teacherId);
 
     const updated = await this.prisma.studentBehaviorRecord.update({
       where: { id },
       data: {
         recordDate: dto.recordDate ? new Date(dto.recordDate) : undefined,
         category: dto.category || undefined,
+        behaviorType: dto.behaviorType === undefined ? undefined : dto.behaviorType.trim() || null,
         level: dto.level || undefined,
         content: dto.content || undefined,
+        resolution: dto.resolution === undefined ? undefined : dto.resolution.trim() || null,
+        note: dto.note === undefined ? undefined : dto.note.trim() || null,
       },
       include: {
         student: { select: { id: true, fullName: true, initials: true, avatarColor: true } },
@@ -577,7 +646,7 @@ export class HomeroomService {
       },
     });
 
-    return {
+    const response = {
       id: updated.id,
       classroomId: updated.classroomId,
       className: updated.classroom.name,
@@ -587,10 +656,23 @@ export class HomeroomService {
       studentColor: updated.student.avatarColor,
       recordDate: updated.recordDate.toISOString().split('T')[0],
       category: updated.category,
+      behaviorType: updated.behaviorType,
       level: updated.level,
       content: updated.content,
+      resolution: updated.resolution,
+      note: updated.note,
       createdAt: updated.createdAt,
     };
+
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'HOMEROOM_BEHAVIOR_UPDATE',
+      resourceType: 'StudentBehaviorRecord',
+      resourceId: updated.id,
+      details: { changedFields: Object.keys(dto) },
+    });
+
+    return response;
   }
 
   async deleteBehaviorRecord(id: string, teacherId: string) {
@@ -605,8 +687,16 @@ export class HomeroomService {
     if (existing.teacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền xóa bản ghi này');
     }
+    await this.validateClassroomOwnership(existing.classroomId, teacherId);
 
     await this.prisma.studentBehaviorRecord.delete({ where: { id } });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'HOMEROOM_BEHAVIOR_DELETE',
+      resourceType: 'StudentBehaviorRecord',
+      resourceId: id,
+      details: { classroomId: existing.classroomId, studentId: existing.studentId },
+    });
     return { success: true, message: 'Đã xóa ghi nhận nề nếp' };
   }
 
@@ -614,12 +704,16 @@ export class HomeroomService {
    * Weekly Summary Aggregation
    */
   async getWeeklySummary(classroomId: string, weekNumber: number, schoolYearId: string | undefined, teacherId: string) {
+    if (!Number.isInteger(weekNumber) || weekNumber < 1 || weekNumber > 54) {
+      throw new BadRequestException('Số tuần không hợp lệ');
+    }
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
     const syId = schoolYearId || classroom.schoolYearId;
 
     // Approximate date range for week
     const schoolYear = await this.prisma.schoolYear.findUnique({ where: { id: syId } });
-    const startDate = new Date(schoolYear?.startDate || '2026-09-01');
+    if (!schoolYear) throw new NotFoundException('Không tìm thấy năm học');
+    const startDate = new Date(schoolYear.startDate);
     const weekStart = new Date(startDate);
     weekStart.setDate(weekStart.getDate() + (weekNumber - 1) * 7);
     weekStart.setHours(0, 0, 0, 0);
@@ -629,10 +723,9 @@ export class HomeroomService {
     weekEnd.setHours(23, 59, 59, 999);
 
     // Active students
-    const totalStudents = await this.prisma.classStudent.count({
+    const totalStudents = await this.prisma.studentEnrollment.count({
       where: { classroomId, status: 'ACTIVE', student: { deletedAt: null } },
     });
-
     // Attendance sessions in week
     const sessions = await this.prisma.attendanceSession.findMany({
       where: {
@@ -661,7 +754,7 @@ export class HomeroomService {
     const presentRate =
       totalAttendanceRecords > 0
         ? parseFloat(((presentCount / totalAttendanceRecords) * 100).toFixed(1))
-        : 100.0;
+        : null;
 
     // Behavior records in week
     const behaviors = await this.prisma.studentBehaviorRecord.findMany({
@@ -698,11 +791,6 @@ export class HomeroomService {
       }
     }
 
-    // Default if no assessments recorded during this exact week
-    if (excellent === 0 && completed === 0 && needsSupport === 0 && totalStudents > 0) {
-      completed = totalStudents;
-    }
-
     return {
       weekNumber,
       dateRange: `${weekStart.toLocaleDateString('vi-VN')} - ${weekEnd.toLocaleDateString('vi-VN')}`,
@@ -716,6 +804,7 @@ export class HomeroomService {
       },
       behavior: behaviorSummary,
       assessment: {
+        isRecorded: assessments.length > 0,
         excellent,
         completed,
         needsSupport,
@@ -746,6 +835,9 @@ export class HomeroomService {
   async saveWeeklyReview(dto: SaveWeeklyReviewDto, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(dto.classroomId, teacherId);
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
+    for (const studentId of new Set((dto.studentComments || []).map((item) => item.studentId))) {
+      await this.validateStudentInClassroom(studentId, dto.classroomId, teacherId);
+    }
 
     const existing = await this.prisma.weeklyClassReview.findUnique({
       where: {
@@ -777,6 +869,9 @@ export class HomeroomService {
         strengths: dto.strengths,
         limitations: dto.limitations,
         nextWeekPlan: dto.nextWeekPlan,
+        notableStudents: dto.notableStudents,
+        supportStudents: dto.supportStudents,
+        studentComments: dto.studentComments as unknown as Prisma.InputJsonValue | undefined,
         version: nextVersion,
       },
       create: {
@@ -787,10 +882,20 @@ export class HomeroomService {
         strengths: dto.strengths,
         limitations: dto.limitations,
         nextWeekPlan: dto.nextWeekPlan,
+        notableStudents: dto.notableStudents,
+        supportStudents: dto.supportStudents,
+        studentComments: dto.studentComments as unknown as Prisma.InputJsonValue | undefined,
         version: 1,
       },
     });
 
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: existing ? 'WEEKLY_COMMENT_UPDATE' : 'WEEKLY_COMMENT_CREATE',
+      resourceType: 'WeeklyClassReview',
+      resourceId: review.id,
+      details: { classroomId: dto.classroomId, schoolYearId, weekNumber: dto.weekNumber, version: review.version },
+    });
     return review;
   }
 
@@ -798,14 +903,42 @@ export class HomeroomService {
    * Monthly Summary Aggregation
    */
   async getMonthlySummary(classroomId: string, year: number, month: number, teacherId: string) {
+    if (!Number.isInteger(year) || year < 2000 || year > 2200 || !Number.isInteger(month) || month < 1 || month > 12) {
+      throw new BadRequestException('Tháng hoặc năm báo cáo không hợp lệ');
+    }
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
 
     const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
 
-    const totalStudents = await this.prisma.classStudent.count({
+    const totalStudents = await this.prisma.studentEnrollment.count({
       where: { classroomId, status: 'ACTIVE', student: { deletedAt: null } },
     });
+    const [studentsAtStart, studentsAtEnd, studentsTransferredIn, studentsTransferredOut] =
+      await Promise.all([
+        this.prisma.studentEnrollment.count({
+          where: {
+            classroomId,
+            enrolledAt: { lt: monthStart },
+            OR: [{ leftAt: null }, { leftAt: { gte: monthStart } }],
+            student: { deletedAt: null },
+          },
+        }),
+        this.prisma.studentEnrollment.count({
+          where: {
+            classroomId,
+            enrolledAt: { lte: monthEnd },
+            OR: [{ leftAt: null }, { leftAt: { gt: monthEnd } }],
+            student: { deletedAt: null },
+          },
+        }),
+        this.prisma.studentEnrollment.count({
+          where: { classroomId, enrolledAt: { gte: monthStart, lte: monthEnd }, student: { deletedAt: null } },
+        }),
+        this.prisma.studentEnrollment.count({
+          where: { classroomId, leftAt: { gte: monthStart, lte: monthEnd }, student: { deletedAt: null } },
+        }),
+      ]);
 
     // Attendance
     const sessions = await this.prisma.attendanceSession.findMany({
@@ -835,7 +968,7 @@ export class HomeroomService {
     const attendanceRate =
       totalAttendanceRecords > 0
         ? parseFloat(((presentCount / totalAttendanceRecords) * 100).toFixed(1))
-        : 100.0;
+        : null;
 
     // Behavior
     const behaviors = await this.prisma.studentBehaviorRecord.findMany({
@@ -872,12 +1005,17 @@ export class HomeroomService {
       }
     }
 
-    if (excellent === 0 && completed === 0 && needsSupport === 0 && totalStudents > 0) {
-      completed = totalStudents;
-    }
-
     // Students needing support and improved
     const studentsNeedingSupport = await this.getStudentsNeedAttention(classroomId, teacherId);
+    const improvedStudentIds = Array.from(
+      new Set(behaviors.filter((b) => b.level === 'POSITIVE').map((b) => b.studentId)),
+    );
+    const improvedStudents = improvedStudentIds.length
+      ? await this.prisma.student.findMany({
+          where: { id: { in: improvedStudentIds }, deletedAt: null },
+          select: { id: true, fullName: true },
+        })
+      : [];
 
     return {
       year,
@@ -885,11 +1023,15 @@ export class HomeroomService {
       classroom: {
         id: classroom.id,
         name: classroom.name,
-        gradeName: classroom.grade?.name || 'Khối 4',
-        schoolYearName: classroom.schoolYear?.name || '2026 - 2027',
+        gradeName: classroom.grade?.name ?? null,
+        schoolYearName: classroom.schoolYear?.name ?? null,
       },
       attendance: {
         totalStudents,
+        studentsAtStart,
+        studentsAtEnd,
+        studentsTransferredIn,
+        studentsTransferredOut,
         totalSchoolDays: sessions.length,
         attendanceRate,
         excusedAbsence,
@@ -897,6 +1039,7 @@ export class HomeroomService {
         late,
       },
       learning: {
+        isRecorded: assessments.length > 0,
         excellent,
         completed,
         needsSupport,
@@ -907,10 +1050,11 @@ export class HomeroomService {
         name: s.studentName,
         reasons: s.reasons.map((r) => r.description),
       })),
-      studentsImproved: [
-        { name: 'Nguyễn Minh Anh', note: 'Có nhiều tiến bộ trong tiếp thu bài và ý thức kỷ luật' },
-        { name: 'Trần Gia Huy', note: 'Tích cực xây dựng bài, hợp tác nhóm tốt' },
-      ],
+      studentsImproved: improvedStudents.map((student) => ({
+        id: student.id,
+        name: student.fullName,
+        note: 'Có ghi nhận nề nếp tích cực trong tháng',
+      })),
     };
   }
 
@@ -954,6 +1098,7 @@ export class HomeroomService {
     }
 
     const nextVersion = (existing?.version || 0) + 1;
+    const summarySnapshot = await this.getMonthlySummary(dto.classroomId, dto.year, dto.month, teacherId);
 
     const review = await this.prisma.monthlyClassReview.upsert({
       where: {
@@ -967,6 +1112,11 @@ export class HomeroomService {
         highlights: dto.highlights,
         limitations: dto.limitations,
         nextMonthPlan: dto.nextMonthPlan,
+        generalComment: dto.generalComment,
+        difficulties: dto.difficulties,
+        measures: dto.measures,
+        classActivities: dto.classActivities,
+        summarySnapshot,
         version: nextVersion,
       },
       create: {
@@ -978,11 +1128,142 @@ export class HomeroomService {
         highlights: dto.highlights,
         limitations: dto.limitations,
         nextMonthPlan: dto.nextMonthPlan,
+        generalComment: dto.generalComment,
+        difficulties: dto.difficulties,
+        measures: dto.measures,
+        classActivities: dto.classActivities,
+        summarySnapshot,
         version: 1,
       },
     });
 
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: existing ? 'MONTHLY_REPORT_UPDATE' : 'MONTHLY_REPORT_CREATE',
+      resourceType: 'MonthlyClassReview',
+      resourceId: review.id,
+      details: { classroomId: dto.classroomId, year: dto.year, month: dto.month, version: review.version },
+    });
     return review;
+  }
+
+  async getHomeroomTasks(classroomId: string, teacherId: string) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    const tasks = await this.prisma.teacherTask.findMany({
+      where: { classroomId, teacherId },
+      orderBy: [{ done: 'asc' }, { dueDate: 'asc' }, { createdAt: 'asc' }],
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    return tasks.map((task) => ({
+      ...task,
+      effectiveStatus:
+        !task.done && task.dueDate && task.dueDate < today ? 'OVERDUE' : task.status,
+    }));
+  }
+
+  async createHomeroomTask(classroomId: string, dto: CreateHomeroomTaskDto, teacherId: string) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    const task = await this.prisma.teacherTask.create({
+      data: {
+        classroomId,
+        teacherId,
+        title: dto.title.trim(),
+        description: dto.note?.trim() || null,
+        dueDate: dto.dueDate?.slice(0, 10) || null,
+        priority: dto.priority || 'MEDIUM',
+        status: 'PENDING',
+        done: false,
+      },
+    });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'HOMEROOM_TASK_CREATE',
+      resourceType: 'TeacherTask',
+      resourceId: task.id,
+      details: { classroomId, priority: task.priority, dueDate: task.dueDate },
+    });
+    return task;
+  }
+
+  async updateHomeroomTask(classroomId: string, id: string, dto: UpdateHomeroomTaskDto, teacherId: string) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    const existing = await this.prisma.teacherTask.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Không tìm thấy việc chủ nhiệm');
+    if (existing.teacherId !== teacherId || existing.classroomId !== classroomId) {
+      throw new ForbiddenException('Bạn không có quyền cập nhật việc chủ nhiệm này');
+    }
+    const done = dto.status === undefined ? undefined : dto.status === 'COMPLETED';
+    const task = await this.prisma.teacherTask.update({
+      where: { id },
+      data: {
+        title: dto.title?.trim(),
+        description: dto.note === undefined ? undefined : dto.note.trim() || null,
+        dueDate: dto.dueDate?.slice(0, 10),
+        priority: dto.priority,
+        status: dto.status,
+        done,
+        completedAt: done === undefined ? undefined : done ? new Date() : null,
+      },
+    });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'HOMEROOM_TASK_UPDATE',
+      resourceType: 'TeacherTask',
+      resourceId: task.id,
+      details: { classroomId, changedFields: Object.keys(dto) },
+    });
+    return task;
+  }
+
+  async getGuardianDirectory(classroomId: string, teacherId: string) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    const enrollments = await this.prisma.studentEnrollment.findMany({
+      where: { classroomId, status: 'ACTIVE', student: { deletedAt: null } },
+      select: {
+        student: {
+          select: { id: true, fullName: true, parentName: true, parentPhone: true, parentEmail: true },
+        },
+      },
+      orderBy: { student: { fullName: 'asc' } },
+    });
+    return enrollments.map(({ student }) => student);
+  }
+
+  async getParentContacts(classroomId: string, teacherId: string, studentId?: string) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    if (studentId) await this.validateStudentInClassroom(studentId, classroomId, teacherId);
+    return this.prisma.parentContactLog.findMany({
+      where: { classroomId, teacherId, studentId },
+      include: { student: { select: { id: true, fullName: true } } },
+      orderBy: [{ contactDate: 'desc' }, { createdAt: 'desc' }],
+      take: 100,
+    });
+  }
+
+  async createParentContact(classroomId: string, dto: CreateParentContactDto, teacherId: string) {
+    const student = await this.validateStudentInClassroom(dto.studentId, classroomId, teacherId);
+    const log = await this.prisma.parentContactLog.create({
+      data: {
+        classroomId,
+        studentId: dto.studentId,
+        teacherId,
+        contactDate: this.dateOnly(dto.contactDate),
+        guardianName: dto.guardianName?.trim() || student.parentName || null,
+        relationship: dto.relationship?.trim() || null,
+        method: dto.method,
+        content: dto.content.trim(),
+        outcome: dto.outcome?.trim() || null,
+      },
+      include: { student: { select: { id: true, fullName: true } } },
+    });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'PARENT_CONTACT_CREATE',
+      resourceType: 'ParentContactLog',
+      resourceId: log.id,
+      details: { classroomId, studentId: dto.studentId, method: dto.method, contactDate: dto.contactDate },
+    });
+    return log;
   }
 
   /**
@@ -1002,10 +1283,10 @@ export class HomeroomService {
 
     const exportData: WeeklyReviewExportData = {
       className: classroom.name,
-      gradeName: classroom.grade?.name || 'Khối 4',
-      schoolYearName: classroom.schoolYear?.name || '2026 - 2027',
+      gradeName: classroom.grade.name,
+      schoolYearName: classroom.schoolYear.name,
       weekNumber,
-      teacherName: classroom.teacher?.fullName || 'Giáo viên chủ nhiệm',
+      teacherName: classroom.teacher.fullName,
       dateRange: summary.dateRange,
       attendance: summary.attendance,
       learning: summary.assessment,
@@ -1046,11 +1327,11 @@ export class HomeroomService {
 
     const exportData: MonthlySummaryExportData = {
       className: classroom.name,
-      gradeName: classroom.grade?.name || 'Khối 4',
-      schoolYearName: classroom.schoolYear?.name || '2026 - 2027',
+      gradeName: classroom.grade.name,
+      schoolYearName: classroom.schoolYear.name,
       year,
       month,
-      teacherName: classroom.teacher?.fullName || 'Giáo viên chủ nhiệm',
+      teacherName: classroom.teacher.fullName,
       attendance: summary.attendance,
       learning: summary.learning,
       behavior: summary.behavior,

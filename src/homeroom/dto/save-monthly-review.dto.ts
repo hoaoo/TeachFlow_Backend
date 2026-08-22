@@ -39,6 +39,22 @@ export class SaveMonthlyReviewDto {
   @IsString()
   nextMonthPlan?: string;
 
+  @ApiPropertyOptional({ description: 'Nhận xét chung' })
+  @IsOptional() @IsString()
+  generalComment?: string;
+
+  @ApiPropertyOptional({ description: 'Khó khăn' })
+  @IsOptional() @IsString()
+  difficulties?: string;
+
+  @ApiPropertyOptional({ description: 'Biện pháp' })
+  @IsOptional() @IsString()
+  measures?: string;
+
+  @ApiPropertyOptional({ description: 'Hoạt động lớp trong tháng' })
+  @IsOptional() @IsString()
+  classActivities?: string;
+
   @ApiPropertyOptional({ description: 'Phiên bản optimistic concurrency', default: 1 })
   @IsOptional()
   @IsInt()

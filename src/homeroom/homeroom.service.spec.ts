@@ -3,7 +3,7 @@ import { NotFoundException, ForbiddenException, ConflictException } from '@nestj
 import { HomeroomService } from './homeroom.service';
 import { HomeroomExportService } from '../export/homeroom-export.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { BehaviorCategory, BehaviorLevel } from '@prisma/client';
+import { BehaviorCategory, BehaviorLevel, ParentContactMethod } from '@prisma/client';
 
 describe('HomeroomService', () => {
   let service: HomeroomService;
@@ -16,9 +16,15 @@ describe('HomeroomService', () => {
     },
     student: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
     },
     classStudent: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
+    },
+    studentEnrollment: {
+      findFirst: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
     },
@@ -36,6 +42,13 @@ describe('HomeroomService', () => {
     },
     teacherTask: {
       findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+    },
+    parentContactLog: {
+      findMany: jest.fn(),
+      create: jest.fn(),
     },
     weeklyClassReview: {
       findFirst: jest.fn(),
@@ -104,7 +117,7 @@ describe('HomeroomService', () => {
         id: 's1',
         deletedAt: null,
       });
-      mockPrisma.classStudent.findUnique.mockResolvedValue(null);
+      mockPrisma.studentEnrollment.findFirst.mockResolvedValue(null);
 
       await expect(service.validateStudentInClassroom('s1', 'c1', 't1')).rejects.toThrow(
         ForbiddenException,
@@ -120,7 +133,7 @@ describe('HomeroomService', () => {
         deletedAt: null,
       });
 
-      mockPrisma.classStudent.findMany.mockResolvedValue([
+      mockPrisma.studentEnrollment.findMany.mockResolvedValue([
         {
           classroomId: 'c1',
           status: 'ACTIVE',
@@ -163,7 +176,7 @@ describe('HomeroomService', () => {
       const in5Days = new Date(today);
       in5Days.setDate(in5Days.getDate() + 5);
 
-      mockPrisma.classStudent.findMany.mockResolvedValue([
+      mockPrisma.studentEnrollment.findMany.mockResolvedValue([
         {
           classroomId: 'c1',
           status: 'ACTIVE',
@@ -193,7 +206,7 @@ describe('HomeroomService', () => {
         id: 's1',
         deletedAt: null,
       });
-      mockPrisma.classStudent.findUnique.mockResolvedValue({
+      mockPrisma.studentEnrollment.findFirst.mockResolvedValue({
         classroomId: 'c1',
         studentId: 's1',
         status: 'ACTIVE',
@@ -256,6 +269,58 @@ describe('HomeroomService', () => {
           't1',
         ),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('6. Homeroom tasks and parent contacts', () => {
+    beforeEach(() => {
+      mockPrisma.classroom.findUnique.mockResolvedValue({
+        id: 'c1',
+        teacherId: 't1',
+        schoolYearId: 'sy1',
+        deletedAt: null,
+      });
+    });
+
+    it('creates a task scoped to the homeroom classroom', async () => {
+      mockPrisma.teacherTask.create.mockResolvedValue({
+        id: 'task-1',
+        classroomId: 'c1',
+        teacherId: 't1',
+        title: 'Chuẩn bị họp phụ huynh',
+        priority: 'HIGH',
+        dueDate: '2026-08-30',
+      });
+
+      const task = await service.createHomeroomTask(
+        'c1',
+        { title: 'Chuẩn bị họp phụ huynh', priority: 'HIGH', dueDate: '2026-08-30' },
+        't1',
+      );
+
+      expect(task.classroomId).toBe('c1');
+      expect(mockPrisma.teacherTask.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ classroomId: 'c1', teacherId: 't1' }) }),
+      );
+    });
+
+    it('rejects a cross-class student before writing a parent contact', async () => {
+      mockPrisma.student.findUnique.mockResolvedValue({ id: 's2', deletedAt: null });
+      mockPrisma.studentEnrollment.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.createParentContact(
+          'c1',
+          {
+            studentId: 's2',
+            contactDate: '2026-08-23',
+            method: ParentContactMethod.PHONE,
+            content: 'Trao đổi tình hình chuyên cần',
+          },
+          't1',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.parentContactLog.create).not.toHaveBeenCalled();
     });
   });
 });

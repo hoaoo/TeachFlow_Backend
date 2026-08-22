@@ -93,6 +93,13 @@ enum BehaviorLevel {
   NEEDS_ATTENTION
 }
 
+enum ParentContactMethod {
+  PHONE
+  IN_PERSON
+  MESSAGE
+  OTHER
+}
+
 enum NotificationType {
   ASSIGNMENT
   ENROLLMENT
@@ -103,17 +110,17 @@ enum NotificationType {
 }
 
 model User {
-  id               String    @id @default(uuid())
-  email            String    @unique
+  id               String   @id @default(uuid())
+  email            String   @unique
   passwordHash     String
-  role             Role      @default(TEACHER)
+  role             Role     @default(TEACHER)
   refreshTokenHash String?
-  isActive         Boolean   @default(true)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  teacher          Teacher?
-  notifications    Notification[]
+  teacher       Teacher?
+  notifications Notification[]
 }
 
 model Teacher {
@@ -141,6 +148,7 @@ model Teacher {
   monthlyClassReviews    MonthlyClassReview[]
   teachingAssignments    TeachingAssignment[]
   schedules              Schedule[]
+  parentContactLogs      ParentContactLog[]
 }
 
 model SchoolYear {
@@ -165,18 +173,18 @@ model SchoolYear {
 }
 
 model Semester {
-  id           String     @id @default(uuid())
+  id           String   @id @default(uuid())
   schoolYearId String
   code         String
   name         String
   startDate    DateTime
   endDate      DateTime
-  sortOrder    Int        @default(1)
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  sortOrder    Int      @default(1)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  schoolYear   SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
 
   @@unique([schoolYearId, code])
   @@index([schoolYearId])
@@ -251,6 +259,8 @@ model Classroom {
   studentBehaviorRecords StudentBehaviorRecord[]
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
+  homeroomTasks          TeacherTask[]
+  parentContactLogs      ParentContactLog[]
   teachingAssignments    TeachingAssignment[]
   schedules              Schedule[]
 
@@ -261,19 +271,19 @@ model Classroom {
 }
 
 model TeachingAssignment {
-  id           String     @id @default(uuid())
+  id           String   @id @default(uuid())
   teacherId    String
   classroomId  String
   subjectId    String
   schoolYearId String
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  teacher      Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  classroom    Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
-  subject      Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  schoolYear   SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+  teacher    Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  classroom  Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
 
   lessonPlans        LessonPlan[]
   attendanceSessions AttendanceSession[]
@@ -294,6 +304,7 @@ model Student {
   gender      StudentGender @default(MALE)
   parentName  String?
   parentPhone String?
+  parentEmail String?
   avatarColor String?       @default("bg-teal-100 text-teal-700")
   status      StudentStatus @default(EXCELLENT)
   deletedAt   DateTime?
@@ -306,6 +317,7 @@ model Student {
   studentAssessments StudentAssessment[]
   comments           StudentComment[]
   behaviorRecords    StudentBehaviorRecord[]
+  parentContactLogs  ParentContactLog[]
 }
 
 model StudentEnrollment {
@@ -321,9 +333,9 @@ model StudentEnrollment {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
-  student        Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  schoolYear     SchoolYear       @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
-  classroom      Classroom        @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  student    Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id], onDelete: Cascade)
+  classroom  Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
 
   @@index([studentId])
   @@index([classroomId, status])
@@ -374,8 +386,8 @@ model Schedule {
   lessonPlanId      String?
   title             String
   plannedDate       DateTime
-  startTime         String    // HH:MM format, e.g. "07:00"
-  endTime           String    // HH:MM format, e.g. "07:45"
+  startTime         String // HH:MM format, e.g. "07:00"
+  endTime           String // HH:MM format, e.g. "07:45"
   actualStartTime   String?
   actualEndTime     String?
   room              String?
@@ -384,17 +396,17 @@ model Schedule {
   status            String    @default("PLANNED") // PLANNED, IN_PROGRESS, TAUGHT, CANCELLED
   isManualStatus    Boolean   @default(false)
   recurrenceGroupId String?
-  recurrenceType    String?   // NONE, WEEKLY
+  recurrenceType    String? // NONE, WEEKLY
   recurrenceEndDate DateTime?
   deletedAt         DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  teacher    Teacher     @relation(fields: [teacherId], references: [id])
-  schoolYear SchoolYear  @relation(fields: [schoolYearId], references: [id])
-  classroom  Classroom   @relation(fields: [classroomId], references: [id])
-  subject    Subject     @relation(fields: [subjectId], references: [id])
-  lessonPlan LessonPlan? @relation(fields: [lessonPlanId], references: [id], onDelete: SetNull)
+  teacher           Teacher            @relation(fields: [teacherId], references: [id])
+  schoolYear        SchoolYear         @relation(fields: [schoolYearId], references: [id])
+  classroom         Classroom          @relation(fields: [classroomId], references: [id])
+  subject           Subject            @relation(fields: [subjectId], references: [id])
+  lessonPlan        LessonPlan?        @relation(fields: [lessonPlanId], references: [id], onDelete: SetNull)
   attendanceSession AttendanceSession?
 
   @@index([teacherId, plannedDate])
@@ -405,7 +417,7 @@ model Schedule {
 }
 
 model TeachingPlan {
-  id              String    @id @default(uuid())
+  id              String   @id @default(uuid())
   teacherId       String
   schoolYearId    String
   classroomId     String
@@ -413,13 +425,13 @@ model TeachingPlan {
   lessonId        String?
   title           String?
   subtitle        String?
-  weekNumber      Int       @default(1)
-  numberOfPeriods Int       @default(1)
-  status          String    @default("PLANNED")
+  weekNumber      Int      @default(1)
+  numberOfPeriods Int      @default(1)
+  status          String   @default("PLANNED")
   meta            String?
-  tone            String?   @default("teal")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  tone            String?  @default("teal")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   teacher    Teacher    @relation(fields: [teacherId], references: [id])
   schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id])
@@ -691,15 +703,15 @@ model AssessmentCriterion {
 }
 
 model StudentAssessment {
-  id                    String           @id @default(uuid())
+  id                    String          @id @default(uuid())
   assessmentId          String
   studentId             String
   assessmentCriterionId String?
-  level                 AssessmentLevel  @default(COMPLETED)
+  level                 AssessmentLevel @default(COMPLETED)
   score                 Float?
-  comment               String?          @db.Text
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
+  comment               String?         @db.Text
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   assessment Assessment           @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
   student    Student              @relation(fields: [studentId], references: [id], onDelete: Cascade)
@@ -770,9 +782,10 @@ model LessonPlanResource {
 model TeacherTask {
   id          String       @id @default(uuid())
   teacherId   String
+  classroomId String?
   title       String
   description String?      @db.Text
-  taskDate    String?      // YYYY-MM-DD in Asia/Ho_Chi_Minh
+  taskDate    String? // YYYY-MM-DD in Asia/Ho_Chi_Minh
   dueDate     String?
   priority    TaskPriority @default(MEDIUM)
   status      TaskStatus   @default(PENDING)
@@ -781,10 +794,12 @@ model TeacherTask {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  teacher Teacher @relation(fields: [teacherId], references: [id])
+  teacher   Teacher    @relation(fields: [teacherId], references: [id])
+  classroom Classroom? @relation(fields: [classroomId], references: [id], onDelete: Cascade)
 
   @@index([teacherId, taskDate])
   @@index([teacherId, createdAt])
+  @@index([classroomId, status])
 }
 
 model AdminAuditLog {
@@ -824,18 +839,21 @@ model Notification {
 }
 
 model StudentBehaviorRecord {
-  id          String           @id @default(uuid())
+  id          String @id @default(uuid())
   classroomId String
   studentId   String
   teacherId   String
 
-  recordDate  DateTime
-  category    BehaviorCategory
-  level       BehaviorLevel
-  content     String           @db.Text
+  recordDate   DateTime
+  category     BehaviorCategory
+  level        BehaviorLevel
+  behaviorType String?
+  content      String           @db.Text
+  resolution   String?          @db.Text
+  note         String?          @db.Text
 
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
@@ -846,21 +864,24 @@ model StudentBehaviorRecord {
 }
 
 model WeeklyClassReview {
-  id           String   @id @default(uuid())
+  id           String @id @default(uuid())
   classroomId  String
   teacherId    String
   schoolYearId String
 
-  weekNumber   Int
+  weekNumber Int
 
-  strengths    String?  @db.Text
-  limitations  String?  @db.Text
-  nextWeekPlan String?  @db.Text
+  strengths       String? @db.Text
+  limitations     String? @db.Text
+  nextWeekPlan    String? @db.Text
+  notableStudents String? @db.Text
+  supportStudents String? @db.Text
+  studentComments Json?
 
-  version      Int      @default(1)
+  version Int @default(1)
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   classroom  Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   teacher    Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
@@ -870,22 +891,27 @@ model WeeklyClassReview {
 }
 
 model MonthlyClassReview {
-  id            String   @id @default(uuid())
-  classroomId   String
-  teacherId     String
-  schoolYearId  String
+  id           String @id @default(uuid())
+  classroomId  String
+  teacherId    String
+  schoolYearId String
 
-  year          Int
-  month         Int
+  year  Int
+  month Int
 
-  highlights    String?  @db.Text
-  limitations   String?  @db.Text
-  nextMonthPlan String?  @db.Text
+  highlights      String? @db.Text
+  limitations     String? @db.Text
+  nextMonthPlan   String? @db.Text
+  generalComment  String? @db.Text
+  difficulties    String? @db.Text
+  measures        String? @db.Text
+  classActivities String? @db.Text
+  summarySnapshot Json?
 
-  version       Int      @default(1)
+  version Int @default(1)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   classroom  Classroom  @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   teacher    Teacher    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
@@ -894,3 +920,25 @@ model MonthlyClassReview {
   @@unique([classroomId, year, month])
 }
 
+model ParentContactLog {
+  id           String              @id @default(uuid())
+  classroomId  String
+  studentId    String
+  teacherId    String
+  contactDate  DateTime            @db.Date
+  guardianName String?
+  relationship String?
+  method       ParentContactMethod
+  content      String              @db.Text
+  outcome      String?             @db.Text
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacher   Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([classroomId, contactDate])
+  @@index([studentId, contactDate])
+  @@index([teacherId, createdAt])
+}

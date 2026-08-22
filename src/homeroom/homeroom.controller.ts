@@ -27,6 +27,8 @@ import { UpdateBehaviorRecordDto } from './dto/update-behavior.dto';
 import { QueryBehaviorDto } from './dto/query-behavior.dto';
 import { SaveWeeklyReviewDto } from './dto/save-weekly-review.dto';
 import { SaveMonthlyReviewDto } from './dto/save-monthly-review.dto';
+import { CreateHomeroomTaskDto, UpdateHomeroomTaskDto } from './dto/homeroom-task.dto';
+import { CreateParentContactDto } from './dto/parent-contact.dto';
 import { buildContentDisposition } from '../export/export.utils';
 
 @ApiTags('Homeroom')
@@ -35,6 +37,89 @@ import { buildContentDisposition } from '../export/export.utils';
 @Controller('homeroom')
 export class HomeroomController {
   constructor(private readonly homeroomService: HomeroomService) {}
+
+  @Get('classrooms')
+  @ApiOperation({ summary: 'Danh sách lớp giáo viên được phân công chủ nhiệm' })
+  getMyHomerooms(@CurrentUser() user: AuthenticatedUser) {
+    return this.homeroomService.getMyHomerooms(user.teacherId);
+  }
+
+  @Get(':classroomId/overview')
+  @ApiOperation({ summary: 'Tổng quan công tác chủ nhiệm theo lớp' })
+  getOverview(
+    @Param('classroomId') classroomId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.getDashboard(classroomId, user.teacherId);
+  }
+
+  @Get(':classroomId/attention-students')
+  getAttentionStudents(
+    @Param('classroomId') classroomId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.getStudentsNeedAttention(classroomId, user.teacherId);
+  }
+
+  @Get(':classroomId/birthdays')
+  getBirthdays(
+    @Param('classroomId') classroomId: string,
+    @Query('days') days: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.getUpcomingBirthdays(
+      classroomId,
+      user.teacherId,
+      days ? Number(days) : 30,
+    );
+  }
+
+  @Get(':classroomId/tasks')
+  getTasks(@Param('classroomId') classroomId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.homeroomService.getHomeroomTasks(classroomId, user.teacherId);
+  }
+
+  @Post(':classroomId/tasks')
+  createTask(
+    @Param('classroomId') classroomId: string,
+    @Body() dto: CreateHomeroomTaskDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.createHomeroomTask(classroomId, dto, user.teacherId);
+  }
+
+  @Patch(':classroomId/tasks/:id')
+  updateTask(
+    @Param('classroomId') classroomId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateHomeroomTaskDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.updateHomeroomTask(classroomId, id, dto, user.teacherId);
+  }
+
+  @Get(':classroomId/guardians')
+  getGuardians(@Param('classroomId') classroomId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.homeroomService.getGuardianDirectory(classroomId, user.teacherId);
+  }
+
+  @Get(':classroomId/parent-contacts')
+  getParentContacts(
+    @Param('classroomId') classroomId: string,
+    @Query('studentId') studentId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.getParentContacts(classroomId, user.teacherId, studentId);
+  }
+
+  @Post(':classroomId/parent-contacts')
+  createParentContact(
+    @Param('classroomId') classroomId: string,
+    @Body() dto: CreateParentContactDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.createParentContact(classroomId, dto, user.teacherId);
+  }
 
   @Get('dashboard')
   @ApiOperation({ summary: 'Lấy dữ liệu tổng quan bảng điều khiển Chủ nhiệm' })
@@ -119,7 +204,7 @@ export class HomeroomController {
   ) {
     return this.homeroomService.getWeeklySummary(
       classId,
-      parseInt(weekNumber || '1', 10),
+      parseInt(weekNumber, 10),
       schoolYearId,
       user.teacherId,
     );
@@ -138,7 +223,7 @@ export class HomeroomController {
   ) {
     return this.homeroomService.getWeeklyReview(
       classId,
-      parseInt(weekNumber || '1', 10),
+      parseInt(weekNumber, 10),
       schoolYearId,
       user.teacherId,
     );
@@ -166,8 +251,8 @@ export class HomeroomController {
   ) {
     return this.homeroomService.getMonthlySummary(
       classId,
-      parseInt(year || '2026', 10),
-      parseInt(month || '8', 10),
+      parseInt(year, 10),
+      parseInt(month, 10),
       user.teacherId,
     );
   }
@@ -185,8 +270,8 @@ export class HomeroomController {
   ) {
     return this.homeroomService.getMonthlyReview(
       classId,
-      parseInt(year || '2026', 10),
-      parseInt(month || '8', 10),
+      parseInt(year, 10),
+      parseInt(month, 10),
       user.teacherId,
     );
   }
@@ -217,7 +302,7 @@ export class HomeroomController {
     const { buffer, asciiFilename, utf8Filename } =
       await this.homeroomService.exportWeeklyReview(
         classId,
-        parseInt(weekNumber || '1', 10),
+        parseInt(weekNumber, 10),
         schoolYearId,
         user.teacherId,
         'docx',
@@ -247,7 +332,7 @@ export class HomeroomController {
     const { buffer, asciiFilename, utf8Filename } =
       await this.homeroomService.exportWeeklyReview(
         classId,
-        parseInt(weekNumber || '1', 10),
+        parseInt(weekNumber, 10),
         schoolYearId,
         user.teacherId,
         'pdf',
@@ -274,8 +359,8 @@ export class HomeroomController {
     const { buffer, asciiFilename, utf8Filename } =
       await this.homeroomService.exportMonthlySummary(
         classId,
-        parseInt(year || '2026', 10),
-        parseInt(month || '8', 10),
+        parseInt(year, 10),
+        parseInt(month, 10),
         user.teacherId,
         'docx',
       );
@@ -304,8 +389,8 @@ export class HomeroomController {
     const { buffer, asciiFilename, utf8Filename } =
       await this.homeroomService.exportMonthlySummary(
         classId,
-        parseInt(year || '2026', 10),
-        parseInt(month || '8', 10),
+        parseInt(year, 10),
+        parseInt(month, 10),
         user.teacherId,
         'pdf',
       );

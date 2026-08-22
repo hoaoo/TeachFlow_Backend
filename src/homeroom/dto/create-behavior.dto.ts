@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsEnum, IsDateString, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsEnum, IsDateString, IsOptional, MaxLength } from 'class-validator';
 import { BehaviorCategory, BehaviorLevel } from '@prisma/client';
 
 export class CreateBehaviorRecordDto {
@@ -26,6 +26,12 @@ export class CreateBehaviorRecordDto {
   @IsEnum(BehaviorCategory, { message: 'Danh mục nề nếp không hợp lệ' })
   category: BehaviorCategory;
 
+  @ApiPropertyOptional({ description: 'Loại sự kiện nề nếp cụ thể' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  behaviorType?: string;
+
   @ApiProperty({
     enum: BehaviorLevel,
     description: 'Mức độ (POSITIVE, REMINDER, NEEDS_ATTENTION)',
@@ -38,4 +44,14 @@ export class CreateBehaviorRecordDto {
   @IsNotEmpty({ message: 'Nội dung ghi nhận không được để trống' })
   @IsString()
   content: string;
+
+  @ApiPropertyOptional({ description: 'Hướng xử lý của giáo viên' })
+  @IsOptional()
+  @IsString()
+  resolution?: string;
+
+  @ApiPropertyOptional({ description: 'Ghi chú nội bộ cần thiết' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
