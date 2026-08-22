@@ -9,6 +9,7 @@ import { ResourcesService } from '../resources/resources.service';
 import { TasksService } from '../tasks/tasks.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { AssessmentsService } from '../assessments/assessments.service';
+import { AcademicCalculationService } from '../assessments/academic-calculation.service';
 import { ActivityLibraryService } from '../activity-library/activity-library.service';
 import { TeachingPlansService } from '../teaching-plans/teaching-plans.service';
 import { ExportService } from '../export/export.service';
@@ -131,6 +132,7 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
         StudentCommentsService,
         TeachingPlansService,
         AssessmentsService,
+        AcademicCalculationService,
         ActivityLibraryService,
         ResourcesService,
         TasksService,

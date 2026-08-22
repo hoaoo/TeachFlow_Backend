@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 
 export class CreateCriterionDto {
   @ApiProperty({ example: 'READING' })
@@ -59,6 +59,28 @@ export class CreateAssessmentDto {
   @IsOptional()
   @IsString()
   schoolYearId?: string;
+
+  @ApiPropertyOptional({ description: 'Học kỳ: 1 (HK1) hoặc 2 (HK2)', example: 1 })
+  @IsOptional()
+  @IsInt()
+  semester?: number;
+
+  @ApiPropertyOptional({ description: 'Loại đánh giá: THUONG_XUYEN, GIUA_KY, CUOI_KY, OTHER', example: 'THUONG_XUYEN' })
+  @IsOptional()
+  @IsString()
+  assessmentType?: string;
+
+  @ApiPropertyOptional({ description: 'Hệ số đánh giá (1, 2, 3)', example: 1 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(10)
+  weight?: number;
+
+  @ApiPropertyOptional({ description: 'Ngày đánh giá ISO string', example: '2026-08-20' })
+  @IsOptional()
+  @IsString()
+  assessmentDate?: string;
 
   @ApiPropertyOptional({ type: [CreateCriterionDto] })
   @IsOptional()

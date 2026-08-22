@@ -14,6 +14,7 @@ import { ReportsService } from '../reports/reports.service';
 import { TeachingPlansService } from '../teaching-plans/teaching-plans.service';
 import { StorageService } from '../resources/storage/storage.service';
 import { TeachingAssignmentAuthorizationService } from './services/teaching-assignment-authorization.service';
+import { AcademicCalculationService } from '../assessments/academic-calculation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 
@@ -109,6 +110,7 @@ describe('Cross-Teacher IDOR Absolute Data Isolation Test Suite', () => {
         StudentsService,
         AttendanceService,
         AssessmentsService,
+        AcademicCalculationService,
         LessonPlansService,
         WorksheetsService,
         ResourcesService,
