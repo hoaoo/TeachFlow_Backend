@@ -1,10 +1,11 @@
-import { Injectable, UnauthorizedException, BadRequestException, Logger, Optional } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, UnauthorizedException, BadRequestException, Logger, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -17,8 +18,66 @@ export class AuthService {
     @Optional() private auditService?: AuditService,
   ) {}
 
+  async register(registerDto: RegisterDto) {
+    const normalizedEmail = registerDto.email.trim().toLowerCase();
+    const fullName = registerDto.fullName.trim();
+    const existingUser = await this.prisma.user.findFirst({
+      where: { email: { equals: normalizedEmail, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (existingUser) {
+      await this.auditService?.log({
+        action: 'AUTH_REGISTER', actorEmail: normalizedEmail, status: 'FAILURE',
+        details: { reason: 'Duplicate email' },
+      });
+      throw new ConflictException('Email đã được sử dụng.');
+    }
+
+    const passwordHash = await bcrypt.hash(registerDto.password, 10);
+    try {
+      const account = await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: { email: normalizedEmail, passwordHash, role: 'TEACHER', isActive: true },
+        });
+        const teacher = await tx.teacher.create({ data: { userId: user.id, fullName } });
+        return { user, teacher };
+      });
+
+      await this.auditService?.log({
+        action: 'AUTH_REGISTER',
+        actorUserId: account.user.id,
+        actorEmail: account.user.email,
+        targetUserId: account.user.id,
+        resourceType: 'Teacher',
+        resourceId: account.teacher.id,
+        status: 'SUCCESS',
+      });
+
+      return {
+        success: true,
+        message: 'Tài khoản đã được tạo thành công.',
+        user: {
+          id: account.user.id,
+          email: account.user.email,
+          role: 'TEACHER',
+          teacher: { id: account.teacher.id, fullName: account.teacher.fullName },
+        },
+      };
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        await this.auditService?.log({
+          action: 'AUTH_REGISTER', actorEmail: normalizedEmail, status: 'FAILURE',
+          details: { reason: 'Unique constraint conflict' },
+        });
+        throw new ConflictException('Email đã được sử dụng.');
+      }
+      throw error;
+    }
+  }
+
   async login(loginDto: LoginDto) {
-    const { email, password } = loginDto;
+    const email = loginDto.email.trim().toLowerCase();
+    const { password } = loginDto;
     const user = await this.prisma.user.findUnique({
       where: { email: email.toLowerCase() },
       include: { teacher: true },
@@ -48,7 +107,7 @@ export class AuthService {
           details: { reason: 'Account disabled' },
         });
       }
-      throw new UnauthorizedException('Tài khoản đã bị vô hiệu hóa');
+      throw new ForbiddenException('Tài khoản hiện đang bị khóa.');
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
@@ -131,13 +190,32 @@ export class AuthService {
     return tokens;
   }
 
-  async logout(userId: string) {
-    if (userId) {
+  async logout(userId?: string, refreshToken?: string) {
+    let resolvedUserId = userId;
+    if (!resolvedUserId && refreshToken) {
+      try {
+        const payload = await this.jwtService.verifyAsync(refreshToken, {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'dev_jwt_refresh_secret_for_test_only_min_32_chars',
+          issuer: this.configService.get<string>('JWT_ISSUER', 'teachflow-backend'),
+          audience: this.configService.get<string>('JWT_AUDIENCE', 'teachflow-frontend'),
+        });
+        const user = await this.prisma.user.findUnique({
+          where: { id: payload.sub }, select: { id: true, refreshTokenHash: true },
+        });
+        if (user?.refreshTokenHash && await bcrypt.compare(refreshToken, user.refreshTokenHash)) {
+          resolvedUserId = user.id;
+        }
+      } catch {
+        // Logout remains idempotent and the cookie is still cleared by the controller.
+      }
+    }
+    if (resolvedUserId) {
       await this.prisma.user.update({
-        where: { id: userId },
+        where: { id: resolvedUserId },
         data: { refreshTokenHash: null },
       });
     }
+    await this.auditService?.log({ action: 'AUTH_LOGOUT', actorUserId: resolvedUserId, status: 'SUCCESS' });
     return { success: true, message: 'Đăng xuất thành công' };
   }
 

@@ -9,6 +9,7 @@ describe('AuthController', () => {
 
   beforeEach(async () => {
     authService = {
+      register: jest.fn(),
       login: jest.fn(),
       refreshToken: jest.fn(),
       logout: jest.fn(),
@@ -33,7 +34,7 @@ describe('AuthController', () => {
     it('should login and set refresh cookie with proper options', async () => {
       const mockResult = {
         user: { id: 'u1', email: 'teacher@teachflow.vn', role: 'TEACHER' },
-        tokens: { accessToken: 'acc_123', refreshToken: 'ref_123' },
+        tokens: { accessToken: 'acc_123', refreshToken: 'ref_123', tokenType: 'Bearer', expiresIn: '15m' },
       };
       (authService.login as jest.Mock).mockResolvedValue(mockResult);
 
@@ -59,7 +60,17 @@ describe('AuthController', () => {
         }),
       );
       expect(res.accessToken).toBe('acc_123');
-      expect(res.refreshToken).toBe('ref_123');
+      expect((res as any).refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('register', () => {
+    it('delegates the strict public payload without a role', async () => {
+      const dto = { fullName: 'Nguyễn Văn A', email: 'teacher@example.com', password: 'Strong@123' };
+      (authService.register as jest.Mock).mockResolvedValue({ success: true, user: { role: 'TEACHER' } });
+      const result = await controller.register(dto);
+      expect(authService.register).toHaveBeenCalledWith(dto);
+      expect(result.user.role).toBe('TEACHER');
     });
   });
 
@@ -86,6 +97,8 @@ describe('AuthController', () => {
       (authService.refreshToken as jest.Mock).mockResolvedValue({
         accessToken: 'new_acc_123',
         refreshToken: 'new_ref_123',
+        tokenType: 'Bearer',
+        expiresIn: '15m',
       });
 
       const res = await controller.refresh(mockReq, {} as any, mockRes);
@@ -100,7 +113,7 @@ describe('AuthController', () => {
         }),
       );
       expect(res.accessToken).toBe('new_acc_123');
-      expect(res.refreshToken).toBe('new_ref_123');
+      expect((res as any).refreshToken).toBeUndefined();
     });
 
     it('should throw 401 if refresh token is malformed', async () => {
@@ -120,7 +133,8 @@ describe('AuthController', () => {
       const mockRes = { clearCookie: jest.fn() } as any;
       (authService.logout as jest.Mock).mockResolvedValue({ message: 'Đăng xuất thành công' });
 
-      const res = await controller.logout('u1', mockRes);
+      const mockReq = { cookies: { refreshToken: 'ref_123' } } as any;
+      const res = await controller.logout(mockReq, mockRes);
 
       expect(mockRes.clearCookie).toHaveBeenCalledWith(
         'refreshToken',
@@ -129,7 +143,7 @@ describe('AuthController', () => {
           path: '/',
         }),
       );
-      expect(authService.logout).toHaveBeenCalledWith('u1');
+      expect(authService.logout).toHaveBeenCalledWith(undefined, 'ref_123');
       expect(res).toEqual({ message: 'Đăng xuất thành công' });
     });
   });

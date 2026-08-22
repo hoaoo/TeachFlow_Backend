@@ -68,6 +68,19 @@ describe('AdminTeachersService', () => {
     expect(service).toBeDefined();
   });
 
+  it('lists a self-registered Teacher profile through the same admin account list', async () => {
+    mockPrisma.teacher.count.mockResolvedValue(1);
+    mockPrisma.teacher.findMany.mockResolvedValue([mockTeacherData]);
+    const result = await service.listTeachers({ page: 1, pageSize: 20 } as any);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toEqual(expect.objectContaining({
+      userId: 'user-teacher-1', email: 'lan@teachflow.vn', role: 'TEACHER',
+    }));
+    expect(mockPrisma.teacher.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { user: { role: 'TEACHER' } },
+    }));
+  });
+
   describe('createTeacher', () => {
     it('should create teacher in transaction and record audit log', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
@@ -93,7 +106,7 @@ describe('AdminTeachersService', () => {
       expect(mockPrisma.adminAuditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            action: 'CREATE_TEACHER',
+            action: 'ADMIN_CREATE_TEACHER',
             actorUserId: 'admin-user-id',
           }),
         }),
@@ -149,7 +162,7 @@ describe('AdminTeachersService', () => {
       expect(mockPrisma.adminAuditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            action: 'DISABLE_TEACHER',
+            action: 'ACCOUNT_LOCK',
             targetUserId: 'user-teacher-1',
           }),
         }),

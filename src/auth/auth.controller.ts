@@ -15,6 +15,7 @@ import { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public } from '../common/decorators/public.decorator';
@@ -47,6 +48,15 @@ export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Public()
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @Post('register')
+  @ApiOperation({ summary: 'Đăng ký công khai tài khoản giáo viên' })
+  @ApiResponse({ status: 201, description: 'Tạo tài khoản TEACHER thành công' })
+  async register(@Body() registerDto: RegisterDto) {
+    return this.authService.register(registerDto);
+  }
+
+  @Public()
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -62,9 +72,10 @@ export class AuthController {
     response.cookie('refreshToken', result.tokens.refreshToken, getRefreshTokenCookieOptions());
 
     return {
-      ...result,
+      user: result.user,
       accessToken: result.tokens.accessToken,
-      refreshToken: result.tokens.refreshToken,
+      tokenType: result.tokens.tokenType,
+      expiresIn: result.tokens.expiresIn,
     };
   }
 
@@ -93,9 +104,9 @@ export class AuthController {
       response.cookie('refreshToken', tokens.refreshToken, getRefreshTokenCookieOptions());
 
       return {
-        ...tokens,
         accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
+        tokenType: tokens.tokenType,
+        expiresIn: tokens.expiresIn,
       };
     } catch (err: any) {
       if (err instanceof UnauthorizedException) {
@@ -105,16 +116,18 @@ export class AuthController {
     }
   }
 
+  @Public()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Đăng xuất tài khoản' })
   async logout(
-    @CurrentUser('userId') userId: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
+    const refreshToken = request.cookies?.refreshToken;
     response.clearCookie('refreshToken', getClearRefreshTokenCookieOptions());
-    return this.authService.logout(userId);
+    return this.authService.logout(undefined, refreshToken);
   }
 
   @Get('me')

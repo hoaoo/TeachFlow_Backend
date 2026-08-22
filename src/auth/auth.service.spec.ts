@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -39,14 +39,22 @@ describe('AuthService', () => {
           useValue: {
             user: {
               findUnique: jest.fn(),
+              findFirst: jest.fn(),
+              create: jest.fn(),
               update: jest.fn(),
             },
+            teacher: { create: jest.fn() },
+            $transaction: jest.fn(async (callback) => callback({
+              user: { create: jest.fn().mockResolvedValue({ id: 'registered-user', email: 'new@example.com', role: 'TEACHER', isActive: true }) },
+              teacher: { create: jest.fn().mockResolvedValue({ id: 'registered-teacher', fullName: 'Nguyễn Văn A' }) },
+            })),
           },
         },
         {
           provide: JwtService,
           useValue: {
             signAsync: jest.fn().mockResolvedValue('mock-jwt-token'),
+            verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }),
           },
         },
         {
@@ -65,6 +73,36 @@ describe('AuthService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('register', () => {
+    it('normalizes identity and always creates the shared TEACHER account/profile', async () => {
+      jest.spyOn(prisma.user, 'findFirst').mockResolvedValue(null);
+      const result = await service.register({
+        fullName: '  Nguyễn Văn A  ',
+        email: '  New@Example.com ',
+        password: 'Strong@123',
+      });
+
+      expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: { email: { equals: 'new@example.com', mode: 'insensitive' } },
+      }));
+      expect(result.user.role).toBe('TEACHER');
+      expect(result.user.teacher.id).toBe('registered-teacher');
+    });
+
+    it('rejects an email already created by admin, case-insensitively', async () => {
+      jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({ id: 'existing' } as any);
+      await expect(service.register({ fullName: 'Teacher', email: 'Teacher@Example.com', password: 'Strong@123' }))
+        .rejects.toThrow(ConflictException);
+    });
+
+    it('maps the unique-constraint race to a conflict', async () => {
+      jest.spyOn(prisma.user, 'findFirst').mockResolvedValue(null);
+      (prisma.$transaction as jest.Mock).mockRejectedValue({ code: 'P2002' });
+      await expect(service.register({ fullName: 'Teacher', email: 'new@example.com', password: 'Strong@123' }))
+        .rejects.toThrow(ConflictException);
+    });
   });
 
   describe('login', () => {
@@ -105,7 +143,7 @@ describe('AuthService', () => {
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should throw UnauthorizedException on disabled account', async () => {
+    it('should reject a locked account with ForbiddenException', async () => {
       const disabledUser = { ...mockUser, isActive: false };
       jest.spyOn(prisma.user, 'findUnique').mockResolvedValue(disabledUser as any);
 
@@ -114,7 +152,16 @@ describe('AuthService', () => {
           email: 'teacher@teachflow.vn',
           password: 'Password123@',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('returns the actual backend role for an admin account', async () => {
+      const admin = { ...mockUser, role: 'ADMIN', teacher: null };
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue(admin as any);
+      jest.spyOn(prisma.user, 'update').mockResolvedValue(admin as any);
+      const result = await service.login({ email: 'TEACHER@TEACHFLOW.VN', password: 'Password123@' });
+      expect(result.user.role).toBe('ADMIN');
+      expect(prisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { email: 'teacher@teachflow.vn' } }));
     });
   });
 
@@ -141,5 +188,25 @@ describe('AuthService', () => {
         service.refreshToken('user-1', 'invalid-token'),
       ).rejects.toThrow(UnauthorizedException);
     });
+
+    it('does not refresh a locked account session', async () => {
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ ...mockUser, isActive: false, refreshTokenHash: 'hash' } as any);
+      await expect(service.refreshToken('user-1', 'refresh-token')).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  it('logout revokes the refresh-token hash', async () => {
+    jest.spyOn(prisma.user, 'update').mockResolvedValue(mockUser as any);
+    await service.logout('user-1');
+    expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'user-1' }, data: { refreshTokenHash: null } });
+  });
+
+  it('logout verifies and revokes the refresh cookie without a valid access token', async () => {
+    const refreshHash = await bcrypt.hash('refresh-token', 10);
+    jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ id: 'user-1', refreshTokenHash: refreshHash } as any);
+    jest.spyOn(prisma.user, 'update').mockResolvedValue(mockUser as any);
+    await service.logout(undefined, 'refresh-token');
+    expect(jwtService.verifyAsync).toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'user-1' }, data: { refreshTokenHash: null } });
   });
 });

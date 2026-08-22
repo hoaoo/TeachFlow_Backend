@@ -143,7 +143,7 @@ export class AdminTeachersService {
       await this.auditService.log({
         actorUserId: actorUser.userId,
         actorEmail: actorUser.email,
-        action: 'TEACHER_CREATE',
+        action: 'ADMIN_CREATE_TEACHER',
         targetUserId: createdTeacher.userId,
         resourceType: 'Teacher',
         resourceId: createdTeacher.id,
@@ -153,7 +153,7 @@ export class AdminTeachersService {
       await this.prisma.adminAuditLog.create({
         data: {
           actorUserId: actorUser.userId,
-          action: 'CREATE_TEACHER',
+          action: 'ADMIN_CREATE_TEACHER',
           targetUserId: createdTeacher.userId,
           details: `Created teacher ${createdTeacher.fullName} (${createdTeacher.user.email})`,
         },
@@ -277,7 +277,7 @@ export class AdminTeachersService {
       },
     });
 
-    const action = dto.isActive ? 'ENABLE_TEACHER' : 'DISABLE_TEACHER';
+    const action = dto.isActive ? 'ACCOUNT_UNLOCK' : 'ACCOUNT_LOCK';
 
     if (this.auditService) {
       await this.auditService.log({
