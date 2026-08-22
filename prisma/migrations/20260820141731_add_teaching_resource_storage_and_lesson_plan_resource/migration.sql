@@ -1,25 +1,39 @@
--- AlterTable
-ALTER TABLE "TeachingResource" ADD COLUMN     "mimeType" TEXT,
-ADD COLUMN     "originalFileName" TEXT,
-ADD COLUMN     "size" INTEGER,
-ADD COLUMN     "storagePath" TEXT,
-ADD COLUMN     "storedFileName" TEXT;
+-- Teaching mode is explicit domain configuration.
+CREATE TYPE "TeachingMode" AS ENUM ('PRIMARY_GENERALIST', 'SUBJECT_SPECIALIST');
 
--- CreateTable
-CREATE TABLE "LessonPlanResource" (
+ALTER TABLE "Teacher"
+ADD COLUMN "teachingMode" "TeachingMode" NOT NULL DEFAULT 'SUBJECT_SPECIALIST';
+
+CREATE TABLE "ClassSubject" (
     "id" TEXT NOT NULL,
-    "lessonPlanId" TEXT NOT NULL,
-    "resourceId" TEXT NOT NULL,
+    "classroomId" TEXT NOT NULL,
+    "subjectId" TEXT NOT NULL,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "LessonPlanResource_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "ClassSubject_pkey" PRIMARY KEY ("id")
 );
 
--- CreateIndex
-CREATE UNIQUE INDEX "LessonPlanResource_lessonPlanId_resourceId_key" ON "LessonPlanResource"("lessonPlanId", "resourceId");
+CREATE UNIQUE INDEX "ClassSubject_classroomId_subjectId_key"
+ON "ClassSubject"("classroomId", "subjectId");
 
--- AddForeignKey
-ALTER TABLE "LessonPlanResource" ADD CONSTRAINT "LessonPlanResource_lessonPlanId_fkey" FOREIGN KEY ("lessonPlanId") REFERENCES "LessonPlan"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE INDEX "ClassSubject_classroomId_isActive_idx"
+ON "ClassSubject"("classroomId", "isActive");
 
--- AddForeignKey
-ALTER TABLE "LessonPlanResource" ADD CONSTRAINT "LessonPlanResource_resourceId_fkey" FOREIGN KEY ("resourceId") REFERENCES "TeachingResource"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE INDEX "ClassSubject_subjectId_idx"
+ON "ClassSubject"("subjectId");
+
+ALTER TABLE "ClassSubject"
+ADD CONSTRAINT "ClassSubject_classroomId_fkey"
+FOREIGN KEY ("classroomId")
+REFERENCES "Classroom"("id")
+ON DELETE CASCADE
+ON UPDATE CASCADE;
+
+ALTER TABLE "ClassSubject"
+ADD CONSTRAINT "ClassSubject_subjectId_fkey"
+FOREIGN KEY ("subjectId")
+REFERENCES "Subject"("id")
+ON DELETE CASCADE
+ON UPDATE CASCADE;
