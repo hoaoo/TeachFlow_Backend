@@ -130,7 +130,13 @@ export class ClassroomsService {
         teacher: true,
         studentEnrollments: {
           where: { status: 'ACTIVE', student: { deletedAt: null } },
-          include: { student: true },
+          include: {
+            student: {
+              include: {
+                studentAttendances: { take: 10, orderBy: { createdAt: 'desc' } },
+              },
+            },
+          },
         },
         classStudents: {
           where: { status: 'ACTIVE', student: { deletedAt: null } },
@@ -168,7 +174,7 @@ export class ClassroomsService {
 
     for (const cls of mappedClasses) {
       cls.students.forEach((s: any) => allUniqueStudentIds.add(s.id));
-      if (typeof cls.attendance === 'number' && cls.attendance > 0) {
+      if (typeof cls.attendance === 'number' && cls.attendance !== null) {
         totalAttendanceWeighted += cls.attendance;
         attendanceCount++;
       }
@@ -177,12 +183,16 @@ export class ClassroomsService {
     const totalStudents = allUniqueStudentIds.size;
     const avgAttendanceRate = attendanceCount > 0
       ? Math.round(totalAttendanceWeighted / attendanceCount)
-      : 96;
+      : null;
 
     if (options?.sort === 'studentCount') {
       mappedClasses.sort((a, b) => b.studentCount - a.studentCount);
     } else if (options?.sort === 'attendanceRate') {
-      mappedClasses.sort((a, b) => (b.attendance || 0) - (a.attendance || 0));
+      mappedClasses.sort((a, b) => {
+        const aVal = a.attendance !== null && a.attendance !== undefined ? a.attendance : -1;
+        const bVal = b.attendance !== null && b.attendance !== undefined ? b.attendance : -1;
+        return bVal - aVal;
+      });
     }
 
     return {
@@ -474,7 +484,13 @@ export class ClassroomsService {
           teacher: true,
           studentEnrollments: {
             where: { status: 'ACTIVE', student: { deletedAt: null } },
-            include: { student: true },
+            include: {
+              student: {
+                include: {
+                  studentAttendances: { take: 10, orderBy: { createdAt: 'desc' } },
+                },
+              },
+            },
           },
         },
       });
@@ -752,7 +768,7 @@ export class ClassroomsService {
       recentAbsences: recentAbsences.slice(0, 5),
       recentLates: recentLates.slice(0, 5),
       recentAssessments: recentAssessments.map((a) => {
-        let avg = 0;
+        let avg: number | null = null;
         if (a.studentAssessments.length > 0) {
           const sum = a.studentAssessments.reduce((acc, curr) => acc + (curr.score || 0), 0);
           avg = parseFloat((sum / a.studentAssessments.length).toFixed(1));
@@ -803,6 +819,12 @@ export class ClassroomsService {
     return enrollments.map((en, idx) => {
       const s = en.student;
       const latestComment = s.comments?.[0]?.content || 'Chưa có nhận xét.';
+      let studentAtt: number | null = null;
+      if (s.studentAttendances && s.studentAttendances.length > 0) {
+        const pres = s.studentAttendances.filter((a: any) => a.status === 'PRESENT' || a.status === 'LATE').length;
+        studentAtt = Math.round((pres / s.studentAttendances.length) * 100);
+      }
+
       return {
         id: s.id,
         stt: idx + 1,
@@ -818,7 +840,7 @@ export class ClassroomsService {
         parentPhone: s.parentPhone || 'Chưa cập nhật',
         progress: s.status === 'EXCELLENT' ? 90 : s.status === 'GOOD' ? 80 : 70,
         status: statusMap[s.status] || 'Khá',
-        attendance: 96,
+        attendance: studentAtt,
         note: latestComment,
         color: s.avatarColor || 'bg-teal-100 text-teal-700',
         enrollmentId: en.id,
@@ -1269,7 +1291,7 @@ export class ClassroomsService {
     const absentTotal = excusedCount + unexcusedCount;
     const attendanceRate = totalRecorded > 0
       ? Math.round(((presentCount + lateCount) / totalRecorded) * 100)
-      : 96;
+      : null;
 
     return {
       summary: {
@@ -1318,7 +1340,7 @@ export class ClassroomsService {
       });
     });
 
-    const avgScore = scoreCount > 0 ? parseFloat((totalScore / scoreCount).toFixed(1)) : 8.4;
+    const avgScore = scoreCount > 0 ? parseFloat((totalScore / scoreCount).toFixed(1)) : null;
 
     return {
       summary: {
@@ -1329,7 +1351,7 @@ export class ClassroomsService {
         totalAssessments: assessments.length,
       },
       assessments: assessments.map((a) => {
-        let avg = 0;
+        let avg: number | null = null;
         if (a.studentAssessments.length > 0) {
           const sum = a.studentAssessments.reduce((acc, curr) => acc + (curr.score || 0), 0);
           avg = parseFloat((sum / a.studentAssessments.length).toFixed(1));
@@ -1402,6 +1424,12 @@ export class ClassroomsService {
 
     const students = rawStudents.filter(Boolean).map((s: any) => {
       const latestComment = s.comments?.[0]?.content || 'Chưa có nhận xét.';
+      let studentAtt: number | null = null;
+      if (s.studentAttendances && s.studentAttendances.length > 0) {
+        const pres = s.studentAttendances.filter((a: any) => a.status === 'PRESENT' || a.status === 'LATE').length;
+        studentAtt = Math.round((pres / s.studentAttendances.length) * 100);
+      }
+
       return {
         id: s.id,
         studentCode: s.studentCode || '',
@@ -1414,14 +1442,14 @@ export class ClassroomsService {
         phone: s.parentPhone || 'Chưa cập nhật',
         progress: s.status === 'EXCELLENT' ? 90 : s.status === 'GOOD' ? 80 : 70,
         status: statusMap[s.status] || 'Khá',
-        attendance: 96,
+        attendance: studentAtt,
         note: latestComment,
         color: s.avatarColor || 'bg-teal-100 text-teal-700',
         enrollmentId: s.enrollmentId,
       };
     });
 
-    let calculatedAttendance = 96;
+    let calculatedAttendance: number | null = null;
     if (cls.attendanceSessions && cls.attendanceSessions.length > 0) {
       let tot = 0;
       let pres = 0;
@@ -1436,7 +1464,7 @@ export class ClassroomsService {
       }
     }
 
-    let calculatedAverage = 8.4;
+    let calculatedAverage: number | null = null;
     if (cls.assessments && cls.assessments.length > 0) {
       let totScore = 0;
       let count = 0;

@@ -403,6 +403,12 @@ export class StudentsService {
     const firstClass = s.classStudents?.[0]?.classroom;
     const latestComment = s.comments?.[0]?.content || 'Chưa có nhận xét.';
 
+    let studentAttendance: number | null = null;
+    if (s.studentAttendances && s.studentAttendances.length > 0) {
+      const pres = s.studentAttendances.filter((a: any) => a.status === 'PRESENT' || a.status === 'LATE').length;
+      studentAttendance = Math.round((pres / s.studentAttendances.length) * 100);
+    }
+
     return {
       id: s.id,
       name: s.fullName,
@@ -413,7 +419,7 @@ export class StudentsService {
       phone: s.parentPhone || 'Chưa cập nhật',
       progress: s.status === 'EXCELLENT' ? 92 : s.status === 'GOOD' ? 84 : 70,
       status: statusMap[s.status] || 'Khá',
-      attendance: 96,
+      attendance: studentAttendance,
       note: latestComment,
       color: s.avatarColor || 'bg-teal-100 text-teal-700',
       className: firstClass?.name || 'Lớp 4A',

@@ -330,4 +330,115 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
       });
     });
   });
+
+  describe('Zero-Data KPIs and Classroom-Scoped Aggregation (Regression Tests)', () => {
+    it('empty classroom returns null attendance rate and null average score', async () => {
+      const mockEmptyClass = {
+        id: 'class-empty',
+        code: '1G',
+        name: 'Lớp 1G',
+        schoolYearId: 'sy-2026',
+        gradeId: 'grade-1',
+        teacherId: 'teacher-a',
+        deletedAt: null,
+        status: 'ACTIVE',
+        isActive: true,
+        grade: { id: 'grade-1', name: 'Khối 1' },
+        schoolYear: mockSchoolYearCurrent,
+        teacher: mockTeacherA,
+        studentEnrollments: [],
+        classStudents: [],
+        attendanceSessions: [],
+        assessments: [],
+        schedules: [],
+      };
+
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([mockEmptyClass]);
+
+      const res = await service.findAll({ teacherId: 'teacher-a' });
+      expect(res.items).toHaveLength(1);
+      expect(res.items[0].studentCount).toBe(0);
+      expect(res.items[0].attendance).toBeNull();
+      expect(res.items[0].average).toBeNull();
+      expect(res.summary.avgAttendanceRate).toBeNull();
+      expect(res.summary.totalStudents).toBe(0);
+    });
+
+    it('classroom A metrics never leak into classroom B', async () => {
+      const mockClassWithData = {
+        id: 'class-a',
+        code: '4A',
+        name: 'Lớp 4A',
+        schoolYearId: 'sy-2026',
+        gradeId: 'grade-4',
+        teacherId: 'teacher-a',
+        deletedAt: null,
+        status: 'ACTIVE',
+        isActive: true,
+        grade: mockGrade4,
+        schoolYear: mockSchoolYearCurrent,
+        teacher: mockTeacherA,
+        studentEnrollments: [
+          {
+            status: 'ACTIVE',
+            student: {
+              id: 's1',
+              fullName: 'Học sinh 1',
+              gender: 'MALE',
+              status: 'GOOD',
+              deletedAt: null,
+              studentAttendances: [{ status: 'PRESENT' }],
+            },
+          },
+        ],
+        attendanceSessions: [
+          {
+            attendances: [{ status: 'PRESENT' }],
+          },
+        ],
+        assessments: [
+          {
+            studentAssessments: [{ score: 9 }],
+          },
+        ],
+        schedules: [],
+      };
+
+      const mockClassEmpty = {
+        id: 'class-b',
+        code: '1G',
+        name: 'Lớp 1G',
+        schoolYearId: 'sy-2026',
+        gradeId: 'grade-1',
+        teacherId: 'teacher-a',
+        deletedAt: null,
+        status: 'ACTIVE',
+        isActive: true,
+        grade: { id: 'grade-1', name: 'Khối 1' },
+        schoolYear: mockSchoolYearCurrent,
+        teacher: mockTeacherA,
+        studentEnrollments: [],
+        attendanceSessions: [],
+        assessments: [],
+        schedules: [],
+      };
+
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClassWithData, mockClassEmpty]);
+
+      const res = await service.findAll({ teacherId: 'teacher-a' });
+      expect(res.items).toHaveLength(2);
+
+      // Class A has its own calculated metrics
+      const classA = res.items.find((c) => c.id === 'class-a');
+      expect(classA?.attendance).toBe(100);
+      expect(classA?.average).toBe(9);
+      expect(classA?.studentCount).toBe(1);
+
+      // Class B has null metrics and does NOT inherit Class A
+      const classB = res.items.find((c) => c.id === 'class-b');
+      expect(classB?.attendance).toBeNull();
+      expect(classB?.average).toBeNull();
+      expect(classB?.studentCount).toBe(0);
+    });
+  });
 });
