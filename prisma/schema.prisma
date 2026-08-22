@@ -366,31 +366,41 @@ model Lesson {
 }
 
 model Schedule {
-  id           String    @id @default(uuid())
-  teacherId    String
-  schoolYearId String
-  classroomId  String
-  subjectId    String
-  title        String
-  plannedDate  DateTime
-  startTime    String    // HH:MM format, e.g. "07:00"
-  endTime      String    // HH:MM format, e.g. "07:45"
-  room         String?
-  notes        String?
-  status         String    @default("PLANNED") // PLANNED, IN_PROGRESS, TAUGHT, CANCELLED
-  isManualStatus Boolean   @default(false)
-  deletedAt      DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                String    @id @default(uuid())
+  teacherId         String
+  schoolYearId      String
+  classroomId       String
+  subjectId         String
+  lessonPlanId      String?
+  title             String
+  plannedDate       DateTime
+  startTime         String    // HH:MM format, e.g. "07:00"
+  endTime           String    // HH:MM format, e.g. "07:45"
+  actualStartTime   String?
+  actualEndTime     String?
+  room              String?
+  notes             String?
+  postLessonNotes   String?   @db.Text
+  status            String    @default("PLANNED") // PLANNED, IN_PROGRESS, TAUGHT, CANCELLED
+  isManualStatus    Boolean   @default(false)
+  recurrenceGroupId String?
+  recurrenceType    String?   // NONE, WEEKLY
+  recurrenceEndDate DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  teacher    Teacher    @relation(fields: [teacherId], references: [id])
-  schoolYear SchoolYear @relation(fields: [schoolYearId], references: [id])
-  classroom  Classroom  @relation(fields: [classroomId], references: [id])
-  subject    Subject    @relation(fields: [subjectId], references: [id])
+  teacher    Teacher     @relation(fields: [teacherId], references: [id])
+  schoolYear SchoolYear  @relation(fields: [schoolYearId], references: [id])
+  classroom  Classroom   @relation(fields: [classroomId], references: [id])
+  subject    Subject     @relation(fields: [subjectId], references: [id])
+  lessonPlan LessonPlan? @relation(fields: [lessonPlanId], references: [id], onDelete: SetNull)
 
   @@index([teacherId, plannedDate])
   @@index([classroomId, plannedDate])
   @@index([schoolYearId])
+  @@index([recurrenceGroupId])
+  @@index([lessonPlanId])
 }
 
 model TeachingPlan {
@@ -450,6 +460,7 @@ model LessonPlan {
   lesson             Lesson?              @relation(fields: [lessonId], references: [id])
   activities         LessonPlanActivity[]
   resources          LessonPlanResource[]
+  schedules          Schedule[]
 
   @@index([teachingAssignmentId])
 }

@@ -12,6 +12,9 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiQuery } from '@ne
 import { SchedulesService } from './schedules.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
+import { DuplicateScheduleDto } from './dto/duplicate-schedule.dto';
+import { UpdateScheduleStatusDto } from './dto/update-status.dto';
+import { LinkLessonPlanDto } from './dto/link-lesson-plan.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Schedules')
@@ -26,7 +29,8 @@ export class SchedulesController {
   @ApiQuery({ name: 'subjectId', required: false, description: 'Lọc theo môn học' })
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Từ ngày (YYYY-MM-DD)' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'Đến ngày (YYYY-MM-DD)' })
-  @ApiQuery({ name: 'status', required: false, description: 'Lọc theo trạng thái (PLANNED, TAUGHT, CANCELLED)' })
+  @ApiQuery({ name: 'status', required: false, description: 'Lọc theo trạng thái (PLANNED, IN_PROGRESS, TAUGHT, CANCELLED)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Tìm kiếm theo bài dạy, môn, lớp...' })
   findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Query('classroomId') classroomId?: string,
@@ -34,6 +38,7 @@ export class SchedulesController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('status') status?: string,
+    @Query('search') search?: string,
   ) {
     return this.schedulesService.findAll(user.teacherId, {
       classroomId,
@@ -41,6 +46,7 @@ export class SchedulesController {
       dateFrom,
       dateTo,
       status,
+      search,
     });
   }
 
@@ -53,7 +59,7 @@ export class SchedulesController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Tạo mới một tiết dạy theo lịch' })
+  @ApiOperation({ summary: 'Tạo mới một tiết dạy theo lịch (hỗ trợ lịch lặp)' })
   @ApiResponse({ status: 201, description: 'Tạo lịch dạy thành công' })
   @ApiResponse({ status: 409, description: 'Trùng lịch dạy' })
   create(
@@ -64,7 +70,7 @@ export class SchedulesController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Cập nhật tiết dạy theo lịch' })
+  @ApiOperation({ summary: 'Cập nhật tiết dạy theo lịch (hỗ trợ cập nhật chuỗi lặp)' })
   @ApiResponse({ status: 200, description: 'Cập nhật thành công' })
   @ApiResponse({ status: 409, description: 'Trùng lịch dạy' })
   update(
@@ -76,9 +82,68 @@ export class SchedulesController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Xóa một tiết dạy khỏi lịch' })
+  @ApiOperation({ summary: 'Xóa một tiết dạy khỏi lịch (hỗ trợ xóa chuỗi lặp)' })
+  @ApiQuery({ name: 'recurrenceScope', required: false, enum: ['THIS_ONLY', 'THIS_AND_FUTURE', 'ALL'] })
   @ApiResponse({ status: 200, description: 'Xóa thành công' })
-  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.schedulesService.remove(id, user.teacherId);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('recurrenceScope') recurrenceScope?: 'THIS_ONLY' | 'THIS_AND_FUTURE' | 'ALL',
+  ) {
+    return this.schedulesService.remove(id, user.teacherId, recurrenceScope);
+  }
+
+  @Post(':id/duplicate')
+  @ApiOperation({ summary: 'Nhân bản một tiết dạy sang ngày/giờ mới' })
+  @ApiResponse({ status: 201, description: 'Nhân bản thành công' })
+  @ApiResponse({ status: 409, description: 'Trùng lịch dạy' })
+  duplicate(
+    @Param('id') id: string,
+    @Body() dto: DuplicateScheduleDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.schedulesService.duplicate(id, dto, user.teacherId);
+  }
+
+  @Patch(':id/status')
+  @ApiOperation({ summary: 'Cập nhật trạng thái tiết dạy (bắt đầu/hoàn thành/hủy)' })
+  @ApiResponse({ status: 200, description: 'Cập nhật trạng thái thành công' })
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateScheduleStatusDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.schedulesService.updateStatus(id, dto, user.teacherId);
+  }
+
+  @Post(':id/lesson-plan')
+  @ApiOperation({ summary: 'Gắn giáo án vào tiết dạy' })
+  @ApiResponse({ status: 200, description: 'Gắn giáo án thành công' })
+  linkLessonPlan(
+    @Param('id') id: string,
+    @Body() dto: LinkLessonPlanDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.schedulesService.linkLessonPlan(id, dto, user.teacherId);
+  }
+
+  @Delete(':id/lesson-plan')
+  @ApiOperation({ summary: 'Gỡ liên kết giáo án khỏi tiết dạy' })
+  @ApiResponse({ status: 200, description: 'Gỡ liên kết thành công' })
+  unlinkLessonPlan(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.schedulesService.unlinkLessonPlan(id, user.teacherId);
+  }
+
+  @Get(':id/attendance')
+  @ApiOperation({ summary: 'Lấy thông tin điểm danh của tiết dạy' })
+  @ApiResponse({ status: 200, description: 'Thông tin điểm danh' })
+  getAttendance(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.schedulesService.getScheduleAttendance(id, user.teacherId);
   }
 }

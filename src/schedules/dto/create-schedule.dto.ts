@@ -60,6 +60,21 @@ export class CreateScheduleDto {
   @IsOptional()
   status?: string;
 
+  @ApiPropertyOptional({ description: 'ID giáo án liên kết (UUID)' })
+  @IsUUID(4, { message: 'ID giáo án không hợp lệ' })
+  @IsOptional()
+  lessonPlanId?: string;
+
+  @ApiPropertyOptional({ description: 'Loại lặp lại', enum: ['NONE', 'WEEKLY'], default: 'NONE' })
+  @IsString()
+  @IsOptional()
+  recurrenceType?: string;
+
+  @ApiPropertyOptional({ description: 'Ngày kết thúc lặp (YYYY-MM-DD)', example: '2027-05-31' })
+  @IsString()
+  @IsOptional()
+  recurrenceEndDate?: string;
+
   @ApiPropertyOptional({ description: 'Cờ đánh dấu trạng thái được giáo viên cập nhật thủ công', example: false })
   @IsOptional()
   isManualStatus?: boolean;
