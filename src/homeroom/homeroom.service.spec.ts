@@ -12,6 +12,7 @@ describe('HomeroomService', () => {
     classroom: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       count: jest.fn(),
     },
     student: {
@@ -48,7 +49,10 @@ describe('HomeroomService', () => {
     },
     parentContactLog: {
       findMany: jest.fn(),
+      findUnique: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
     },
     weeklyClassReview: {
       findFirst: jest.fn(),
@@ -89,6 +93,28 @@ describe('HomeroomService', () => {
   });
 
   describe('1. Scope & Ownership Validation', () => {
+    it('returns an empty homeroom response instead of selecting an arbitrary class', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([]);
+
+      await expect(service.getMyHomerooms('t1')).resolves.toEqual({
+        hasHomeroomClass: false,
+        classes: [],
+      });
+      expect(mockPrisma.classroom.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ homeroomTeacherId: 't1' }),
+        }),
+      );
+    });
+
+    it('dashboard without classroom id is a graceful empty state and runs no detail query', async () => {
+      await expect(service.getDashboard(undefined, 't1')).resolves.toEqual(
+        expect.objectContaining({ hasHomeroomClass: false, classroom: null }),
+      );
+      expect(mockPrisma.classroom.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.classroom.findUnique).not.toHaveBeenCalled();
+    });
+
     it('validateClassroomOwnership should throw NotFoundException if classroom not found', async () => {
       mockPrisma.classroom.findUnique.mockResolvedValue(null);
       await expect(service.validateClassroomOwnership('c1', 't1')).rejects.toThrow(
@@ -100,6 +126,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't2',
+        homeroomTeacherId: 't2',
         deletedAt: null,
       });
       await expect(service.validateClassroomOwnership('c1', 't1')).rejects.toThrow(
@@ -111,6 +138,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         deletedAt: null,
       });
       mockPrisma.student.findUnique.mockResolvedValue({
@@ -130,6 +158,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         deletedAt: null,
       });
 
@@ -169,6 +198,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         deletedAt: null,
       });
 
@@ -200,6 +230,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         deletedAt: null,
       });
       mockPrisma.student.findUnique.mockResolvedValue({
@@ -216,6 +247,7 @@ describe('HomeroomService', () => {
         classroomId: 'c1',
         studentId: 's1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         recordDate: new Date('2026-08-20'),
         category: BehaviorCategory.TEAMWORK,
         level: BehaviorLevel.POSITIVE,
@@ -247,6 +279,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         schoolYearId: 'sy1',
         deletedAt: null,
       });
@@ -277,6 +310,7 @@ describe('HomeroomService', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: 'c1',
         teacherId: 't1',
+        homeroomTeacherId: 't1',
         schoolYearId: 'sy1',
         deletedAt: null,
       });
@@ -321,6 +355,19 @@ describe('HomeroomService', () => {
         ),
       ).rejects.toThrow(ForbiddenException);
       expect(mockPrisma.parentContactLog.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects updating a parent contact from another classroom', async () => {
+      mockPrisma.parentContactLog.findUnique.mockResolvedValue({
+        id: 'contact-2',
+        classroomId: 'c2',
+        teacherId: 't1',
+      });
+
+      await expect(
+        service.updateParentContact('c1', 'contact-2', { outcome: 'Changed' }, 't1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.parentContactLog.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -28,7 +28,7 @@ import { QueryBehaviorDto } from './dto/query-behavior.dto';
 import { SaveWeeklyReviewDto } from './dto/save-weekly-review.dto';
 import { SaveMonthlyReviewDto } from './dto/save-monthly-review.dto';
 import { CreateHomeroomTaskDto, UpdateHomeroomTaskDto } from './dto/homeroom-task.dto';
-import { CreateParentContactDto } from './dto/parent-contact.dto';
+import { CreateParentContactDto, UpdateParentContactDto } from './dto/parent-contact.dto';
 import { buildContentDisposition } from '../export/export.utils';
 
 @ApiTags('Homeroom')
@@ -119,6 +119,25 @@ export class HomeroomController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.homeroomService.createParentContact(classroomId, dto, user.teacherId);
+  }
+
+  @Patch(':classroomId/parent-contacts/:id')
+  updateParentContact(
+    @Param('classroomId') classroomId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateParentContactDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.updateParentContact(classroomId, id, dto, user.teacherId);
+  }
+
+  @Delete(':classroomId/parent-contacts/:id')
+  deleteParentContact(
+    @Param('classroomId') classroomId: string,
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.homeroomService.deleteParentContact(classroomId, id, user.teacherId);
   }
 
   @Get('dashboard')

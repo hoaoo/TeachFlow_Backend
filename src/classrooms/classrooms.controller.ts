@@ -97,6 +97,24 @@ export class ClassroomsController {
     return this.classroomsService.update(id, dto, teacherId);
   }
 
+  @Post(':id/homeroom')
+  @ApiOperation({ summary: 'Đặt lớp làm lớp chủ nhiệm của giáo viên hiện tại' })
+  async setAsHomeroom(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.classroomsService.setAsHomeroom(id, user.teacherId);
+  }
+
+  @Delete(':id/homeroom')
+  @ApiOperation({ summary: 'Bỏ phân công chủ nhiệm của giáo viên hiện tại' })
+  async unsetAsHomeroom(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.classroomsService.unsetAsHomeroom(id, user.teacherId);
+  }
+
   @Delete(':id')
   @ApiOperation({ summary: 'Xóa / Lưu trữ lớp học' })
   async remove(

@@ -282,6 +282,7 @@ describe('StudentsService (Production Unit Tests)', () => {
           deletedAt: null,
           OR: [
             { teacherId: 'teacher-a' },
+            { homeroomTeacherId: 'teacher-a' },
             { teachingAssignments: { some: { teacherId: 'teacher-a', isActive: true } } },
           ],
         },

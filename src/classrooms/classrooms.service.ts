@@ -81,6 +81,7 @@ export class ClassroomsService {
     if (options?.teacherId) {
       where.OR = [
         { teacherId: options.teacherId },
+        { homeroomTeacherId: options.teacherId },
         { teachingAssignments: { some: { teacherId: options.teacherId, isActive: true } } },
       ];
     }
@@ -129,6 +130,7 @@ export class ClassroomsService {
         grade: true,
         schoolYear: true,
         teacher: true,
+        homeroomTeacher: true,
         studentEnrollments: {
           where: { status: 'ACTIVE', student: { deletedAt: null } },
           include: {
@@ -383,6 +385,7 @@ export class ClassroomsService {
           gradeId,
           schoolYearId,
           teacherId: targetTeacherId,
+          homeroomTeacherId: null,
           room: dto.room || 'Phòng học',
           schedule: dto.schedule || 'Sáng · Thứ 2 - Thứ 6',
           accent: dto.accent || 'teal',
@@ -396,6 +399,7 @@ export class ClassroomsService {
           grade: true,
           schoolYear: true,
           teacher: true,
+          homeroomTeacher: true,
           studentEnrollments: {
             include: { student: true },
           },
@@ -420,6 +424,63 @@ export class ClassroomsService {
       }
       throw err;
     }
+  }
+
+  async setAsHomeroom(id: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể tự đặt lớp chủ nhiệm');
+    }
+    const classroom = await this.prisma.classroom.findUnique({
+      where: { id },
+      include: { schoolYear: true },
+    });
+    if (!classroom || classroom.deletedAt) {
+      throw new NotFoundException(`Không tìm thấy lớp học với mã ${id}`);
+    }
+    if (classroom.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền quản lý phân công chủ nhiệm của lớp này');
+    }
+    if (!classroom.isActive || !classroom.schoolYear.isActive) {
+      throw new BadRequestException('Không thể đặt chủ nhiệm cho lớp hoặc năm học không hoạt động');
+    }
+    const updated = await this.prisma.classroom.update({
+      where: { id },
+      data: { homeroomTeacherId: teacherId },
+      include: { grade: true, schoolYear: true, teacher: true, homeroomTeacher: true },
+    });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'CLASSROOM_HOMEROOM_ASSIGN',
+      resourceType: 'Classroom',
+      resourceId: id,
+      details: { homeroomTeacherId: teacherId },
+    });
+    return this.mapClassroom(updated);
+  }
+
+  async unsetAsHomeroom(id: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể bỏ lớp chủ nhiệm');
+    }
+    const classroom = await this.prisma.classroom.findUnique({ where: { id } });
+    if (!classroom || classroom.deletedAt) {
+      throw new NotFoundException(`Không tìm thấy lớp học với mã ${id}`);
+    }
+    if (classroom.teacherId !== teacherId || classroom.homeroomTeacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền bỏ phân công chủ nhiệm của lớp này');
+    }
+    const updated = await this.prisma.classroom.update({
+      where: { id },
+      data: { homeroomTeacherId: null },
+      include: { grade: true, schoolYear: true, teacher: true, homeroomTeacher: true },
+    });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'CLASSROOM_HOMEROOM_UNASSIGN',
+      resourceType: 'Classroom',
+      resourceId: id,
+    });
+    return this.mapClassroom(updated);
   }
 
   async update(id: string, dto: UpdateClassroomDto, teacherId?: string) {
@@ -1538,12 +1599,12 @@ export class ClassroomsService {
             isCurrent: cls.schoolYear.isCurrent,
           }
         : undefined,
-      homeroomTeacherId: cls.teacherId,
-      homeroomTeacher: cls.teacher
+      homeroomTeacherId: cls.homeroomTeacherId || undefined,
+      homeroomTeacher: cls.homeroomTeacher
         ? {
-            id: cls.teacher.id,
-            fullName: cls.teacher.fullName,
-            phone: cls.teacher.phone,
+            id: cls.homeroomTeacher.id,
+            fullName: cls.homeroomTeacher.fullName,
+            phone: cls.homeroomTeacher.phone,
           }
         : undefined,
       room: cls.room || 'Phòng học',

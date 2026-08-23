@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PartialType } from '@nestjs/swagger';
 import { ParentContactMethod } from '@prisma/client';
 import { IsDateString, IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
@@ -30,4 +31,10 @@ export class CreateParentContactDto {
   @ApiPropertyOptional()
   @IsOptional() @IsString()
   outcome?: string;
+
+  @ApiPropertyOptional({ description: 'Việc cần tiếp tục theo dõi sau trao đổi' })
+  @IsOptional() @IsString()
+  followUp?: string;
 }
+
+export class UpdateParentContactDto extends PartialType(CreateParentContactDto) {}

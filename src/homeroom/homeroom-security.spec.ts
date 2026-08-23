@@ -79,6 +79,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: classroomBId,
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
         deletedAt: null,
       });
 
@@ -93,6 +94,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: classroomBId,
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
         deletedAt: null,
       });
 
@@ -107,6 +109,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: classroomBId,
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
         deletedAt: null,
       });
 
@@ -121,6 +124,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: classroomBId,
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
         deletedAt: null,
       });
 
@@ -145,6 +149,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.studentBehaviorRecord.findUnique.mockResolvedValue({
         id: 'rec-B',
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
       });
 
       await expect(
@@ -158,6 +163,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.studentBehaviorRecord.findUnique.mockResolvedValue({
         id: 'rec-B',
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
       });
 
       await expect(service.deleteBehaviorRecord('rec-B', teacherAId)).rejects.toThrow(
@@ -173,6 +179,7 @@ describe('Homeroom Security & Data Isolation Invariants', () => {
       mockPrisma.classroom.findUnique.mockResolvedValue({
         id: classroomBId,
         teacherId: teacherBId,
+        homeroomTeacherId: teacherBId,
         deletedAt: null,
       });
 

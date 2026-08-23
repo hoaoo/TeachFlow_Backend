@@ -20,6 +20,7 @@ export class TeachingAssignmentAuthorizationService {
       deletedAt: null,
       OR: [
         { teacherId },
+        { homeroomTeacherId: teacherId },
         { teachingAssignments: { some: { teacherId, isActive: true } } },
       ],
     };
@@ -49,7 +50,7 @@ export class TeachingAssignmentAuthorizationService {
       throw new NotFoundException(`Không tìm thấy lớp học với mã ${classroomId}`);
     }
 
-    const isHomeroom = classroom.teacherId === teacherId;
+    const isHomeroom = classroom.homeroomTeacherId === teacherId;
     if (requireHomeroom && !isHomeroom) {
       throw new ForbiddenException('Chỉ giáo viên chủ nhiệm mới có quyền thực hiện thao tác này');
     }
@@ -259,7 +260,7 @@ export class TeachingAssignmentAuthorizationService {
       throw new NotFoundException(`Không tìm thấy lớp học với mã ${classroomId}`);
     }
 
-    const isHomeroom = classroom.teacherId === teacherId;
+    const isHomeroom = classroom.homeroomTeacherId === teacherId;
     const hasAssignment = (classroom.teachingAssignments || []).length > 0;
 
     if (!isHomeroom && !hasAssignment) {

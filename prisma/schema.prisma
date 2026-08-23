@@ -139,7 +139,8 @@ model Teacher {
   updatedAt    DateTime     @updatedAt
 
   user                   User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  classrooms             Classroom[]
+  classrooms             Classroom[]             @relation("ClassroomOwner")
+  homeroomClassrooms     Classroom[]             @relation("ClassroomHomeroomTeacher")
   teachingPlans          TeachingPlan[]
   lessonPlans            LessonPlan[]
   teachingActivities     TeachingActivity[]
@@ -243,6 +244,7 @@ model Classroom {
   gradeId      String
   schoolYearId String
   teacherId    String
+  homeroomTeacherId String?
   room         String?
   schedule     String?
   accent       String?   @default("teal")
@@ -254,7 +256,8 @@ model Classroom {
 
   grade                  Grade                   @relation(fields: [gradeId], references: [id])
   schoolYear             SchoolYear              @relation(fields: [schoolYearId], references: [id])
-  teacher                Teacher                 @relation(fields: [teacherId], references: [id])
+  teacher                Teacher                 @relation("ClassroomOwner", fields: [teacherId], references: [id])
+  homeroomTeacher        Teacher?                @relation("ClassroomHomeroomTeacher", fields: [homeroomTeacherId], references: [id], onDelete: SetNull)
   classStudents          ClassStudent[]
   studentEnrollments     StudentEnrollment[]
   teachingPlans          TeachingPlan[]
@@ -276,6 +279,7 @@ model Classroom {
   @@index([schoolYearId])
   @@index([gradeId])
   @@index([teacherId])
+  @@index([homeroomTeacherId])
 }
 
 model ClassSubject {
@@ -956,6 +960,7 @@ model ParentContactLog {
   method       ParentContactMethod
   content      String              @db.Text
   outcome      String?             @db.Text
+  followUp     String?             @db.Text
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 

@@ -22,7 +22,7 @@ import {
 import { sanitizeFilename } from '../export/export.utils';
 import { AuditService } from '../common/audit/audit.service';
 import { CreateHomeroomTaskDto, UpdateHomeroomTaskDto } from './dto/homeroom-task.dto';
-import { CreateParentContactDto } from './dto/parent-contact.dto';
+import { CreateParentContactDto, UpdateParentContactDto } from './dto/parent-contact.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
@@ -55,31 +55,40 @@ export class HomeroomService {
 
   async getMyHomerooms(teacherId: string) {
     const classrooms = await this.prisma.classroom.findMany({
-      where: { teacherId, deletedAt: null, isActive: true },
+      where: {
+        homeroomTeacherId: teacherId,
+        deletedAt: null,
+        isActive: true,
+        schoolYear: { isActive: true, isCurrent: true },
+      },
       include: { grade: true, schoolYear: true },
       orderBy: [{ schoolYear: { startDate: 'desc' } }, { name: 'asc' }],
     });
 
-    return classrooms.map((classroom) => ({
-      id: classroom.id,
-      code: classroom.code,
-      name: classroom.name,
-      gradeName: classroom.grade.name,
-      schoolYearId: classroom.schoolYearId,
-      schoolYearName: classroom.schoolYear.name,
-    }));
+    return {
+      hasHomeroomClass: classrooms.length > 0,
+      classes: classrooms.map((classroom) => ({
+        id: classroom.id,
+        code: classroom.code,
+        name: classroom.name,
+        gradeName: classroom.grade.name,
+        gradeLevel: classroom.grade.level,
+        schoolYearId: classroom.schoolYearId,
+        schoolYearName: classroom.schoolYear.name,
+      })),
+    };
   }
 
   /**
    * Validate Classroom exists, not deleted, and belongs to currentTeacherId
    */
-  async validateClassroomOwnership(classroomId: string, teacherId: string) {
+  async getHomeroomClassOrThrow(classroomId: string, teacherId: string) {
     const classroom = await this.prisma.classroom.findUnique({
       where: { id: classroomId },
       include: {
         schoolYear: true,
         grade: true,
-        teacher: true,
+        homeroomTeacher: true,
       },
     });
 
@@ -87,11 +96,19 @@ export class HomeroomService {
       throw new NotFoundException('Không tìm thấy lớp học');
     }
 
-    if (classroom.teacherId !== teacherId) {
+    if (
+      classroom.homeroomTeacherId !== teacherId ||
+      classroom.isActive === false ||
+      classroom.schoolYear?.isActive === false
+    ) {
       throw new ForbiddenException('Bạn không có quyền truy cập lớp học này');
     }
 
     return classroom;
+  }
+
+  async validateClassroomOwnership(classroomId: string, teacherId: string) {
+    return this.getHomeroomClassOrThrow(classroomId, teacherId);
   }
 
   /**
@@ -125,29 +142,25 @@ export class HomeroomService {
   async getDashboard(classId: string | undefined, teacherId: string) {
     let classroomId = classId;
     if (!classroomId) {
-      const firstClass = await this.prisma.classroom.findFirst({
-        where: { teacherId, deletedAt: null, isActive: true },
-        orderBy: [{ schoolYear: { startDate: 'desc' } }, { name: 'asc' }],
-      });
-      if (!firstClass) {
-        return {
-          classroom: null,
-          studentCount: 0,
-          attendanceToday: {
-            isRecorded: false,
-            total: 0,
-            present: 0,
-            excusedAbsence: 0,
-            unexcusedAbsence: 0,
-            late: 0,
-          },
-          studentsNeedAttention: [],
-          upcomingBirthdays: [],
-          recentBehavior: [],
-          recentEvents: [],
-        };
-      }
-      classroomId = firstClass.id;
+      return {
+        hasHomeroomClass: false,
+        classroom: null,
+        studentCount: 0,
+        attendanceToday: {
+          isRecorded: false,
+          total: 0,
+          present: 0,
+          excusedAbsence: 0,
+          unexcusedAbsence: 0,
+          late: 0,
+        },
+        studentsNeedAttention: [],
+        upcomingBirthdays: [],
+        recentBehavior: [],
+        recentEvents: [],
+        tasks: [],
+        currentWeekReview: null,
+      };
     }
 
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
@@ -209,6 +222,7 @@ export class HomeroomService {
     });
 
     return {
+      hasHomeroomClass: true,
       classroom: {
         id: classroom.id,
         name: classroom.name,
@@ -474,7 +488,15 @@ export class HomeroomService {
    * Behavior Records CRUD
    */
   async getBehaviorRecords(query: QueryBehaviorDto, teacherId: string) {
-    const where: any = { teacherId };
+    const where: any = {
+      teacherId,
+      classroom: {
+        homeroomTeacherId: teacherId,
+        deletedAt: null,
+        isActive: true,
+        schoolYear: { isActive: true },
+      },
+    };
 
     if (query.classId) {
       await this.validateClassroomOwnership(query.classId, teacherId);
@@ -708,6 +730,9 @@ export class HomeroomService {
       throw new BadRequestException('Số tuần không hợp lệ');
     }
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
+    if (schoolYearId && schoolYearId !== classroom.schoolYearId) {
+      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+    }
     const syId = schoolYearId || classroom.schoolYearId;
 
     // Approximate date range for week
@@ -817,6 +842,9 @@ export class HomeroomService {
    */
   async getWeeklyReview(classroomId: string, weekNumber: number, schoolYearId: string | undefined, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
+    if (schoolYearId && schoolYearId !== classroom.schoolYearId) {
+      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+    }
     const syId = schoolYearId || classroom.schoolYearId;
 
     const review = await this.prisma.weeklyClassReview.findUnique({
@@ -834,6 +862,9 @@ export class HomeroomService {
 
   async saveWeeklyReview(dto: SaveWeeklyReviewDto, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(dto.classroomId, teacherId);
+    if (dto.schoolYearId && dto.schoolYearId !== classroom.schoolYearId) {
+      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+    }
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
     for (const studentId of new Set((dto.studentComments || []).map((item) => item.studentId))) {
       await this.validateStudentInClassroom(studentId, dto.classroomId, teacherId);
@@ -1079,6 +1110,9 @@ export class HomeroomService {
 
   async saveMonthlyReview(dto: SaveMonthlyReviewDto, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(dto.classroomId, teacherId);
+    if (dto.schoolYearId && dto.schoolYearId !== classroom.schoolYearId) {
+      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+    }
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
 
     const existing = await this.prisma.monthlyClassReview.findUnique({
@@ -1253,6 +1287,7 @@ export class HomeroomService {
         method: dto.method,
         content: dto.content.trim(),
         outcome: dto.outcome?.trim() || null,
+        followUp: dto.followUp?.trim() || null,
       },
       include: { student: { select: { id: true, fullName: true } } },
     });
@@ -1264,6 +1299,63 @@ export class HomeroomService {
       details: { classroomId, studentId: dto.studentId, method: dto.method, contactDate: dto.contactDate },
     });
     return log;
+  }
+
+  async updateParentContact(
+    classroomId: string,
+    id: string,
+    dto: UpdateParentContactDto,
+    teacherId: string,
+  ) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    const existing = await this.prisma.parentContactLog.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Không tìm thấy lần trao đổi phụ huynh');
+    if (existing.classroomId !== classroomId || existing.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền cập nhật lần trao đổi phụ huynh này');
+    }
+    if (dto.studentId) {
+      await this.validateStudentInClassroom(dto.studentId, classroomId, teacherId);
+    }
+    const updated = await this.prisma.parentContactLog.update({
+      where: { id },
+      data: {
+        studentId: dto.studentId,
+        contactDate: dto.contactDate ? this.dateOnly(dto.contactDate) : undefined,
+        guardianName: dto.guardianName === undefined ? undefined : dto.guardianName.trim() || null,
+        relationship: dto.relationship === undefined ? undefined : dto.relationship.trim() || null,
+        method: dto.method,
+        content: dto.content?.trim(),
+        outcome: dto.outcome === undefined ? undefined : dto.outcome.trim() || null,
+        followUp: dto.followUp === undefined ? undefined : dto.followUp.trim() || null,
+      },
+      include: { student: { select: { id: true, fullName: true } } },
+    });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'PARENT_CONTACT_UPDATE',
+      resourceType: 'ParentContactLog',
+      resourceId: id,
+      details: { classroomId, changedFields: Object.keys(dto) },
+    });
+    return updated;
+  }
+
+  async deleteParentContact(classroomId: string, id: string, teacherId: string) {
+    await this.validateClassroomOwnership(classroomId, teacherId);
+    const existing = await this.prisma.parentContactLog.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Không tìm thấy lần trao đổi phụ huynh');
+    if (existing.classroomId !== classroomId || existing.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền xóa lần trao đổi phụ huynh này');
+    }
+    await this.prisma.parentContactLog.delete({ where: { id } });
+    await this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'PARENT_CONTACT_DELETE',
+      resourceType: 'ParentContactLog',
+      resourceId: id,
+      details: { classroomId },
+    });
+    return { success: true, message: 'Đã xóa lịch sử trao đổi phụ huynh' };
   }
 
   /**
@@ -1286,7 +1378,7 @@ export class HomeroomService {
       gradeName: classroom.grade.name,
       schoolYearName: classroom.schoolYear.name,
       weekNumber,
-      teacherName: classroom.teacher.fullName,
+      teacherName: classroom.homeroomTeacher.fullName,
       dateRange: summary.dateRange,
       attendance: summary.attendance,
       learning: summary.assessment,
@@ -1331,7 +1423,7 @@ export class HomeroomService {
       schoolYearName: classroom.schoolYear.name,
       year,
       month,
-      teacherName: classroom.teacher.fullName,
+      teacherName: classroom.homeroomTeacher.fullName,
       attendance: summary.attendance,
       learning: summary.learning,
       behavior: summary.behavior,
