@@ -27,6 +27,14 @@ export class CreateClassroomDto {
   @IsString()
   homeroomTeacherId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Đánh dấu lớp chủ nhiệm của giáo viên hiện tại (lấy từ JWT, không tin teacherId từ client)',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isHomeroom?: boolean;
+
   @ApiPropertyOptional({ description: 'ID Giáo viên (tương thích backward)' })
   @IsOptional()
   @IsString()

@@ -93,15 +93,16 @@ export class HomeroomService {
     });
 
     if (!classroom || classroom.deletedAt) {
-      throw new NotFoundException('Không tìm thấy lớp học');
+      throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp hÃƒÂ¡Ã‚Â»Ã‚Âc');
     }
 
     if (
       classroom.homeroomTeacherId !== teacherId ||
       classroom.isActive === false ||
-      classroom.schoolYear?.isActive === false
+      classroom.schoolYear?.isActive === false ||
+      classroom.schoolYear?.isCurrent === false
     ) {
-      throw new ForbiddenException('Bạn không có quyền truy cập lớp học này');
+      throw new ForbiddenException('BÃƒÂ¡Ã‚ÂºÃ‚Â¡n khÃƒÆ’Ã‚Â´ng cÃƒÆ’Ã‚Â³ quyÃƒÂ¡Ã‚Â»Ã‚Ân truy cÃƒÂ¡Ã‚ÂºÃ‚Â­p lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp hÃƒÂ¡Ã‚Â»Ã‚Âc nÃƒÆ’Ã‚Â y');
     }
 
     return classroom;
@@ -122,7 +123,7 @@ export class HomeroomService {
     });
 
     if (!student || student.deletedAt) {
-      throw new NotFoundException('Không tìm thấy học sinh');
+      throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y hÃƒÂ¡Ã‚Â»Ã‚Âc sinh');
     }
 
     const enrollment = await this.prisma.studentEnrollment.findFirst({
@@ -130,7 +131,7 @@ export class HomeroomService {
     });
 
     if (!enrollment) {
-      throw new ForbiddenException('Học sinh không thuộc lớp học này hoặc đã thôi học');
+      throw new ForbiddenException('HÃƒÂ¡Ã‚Â»Ã‚Âc sinh khÃƒÆ’Ã‚Â´ng thuÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢c lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp hÃƒÂ¡Ã‚Â»Ã‚Âc nÃƒÆ’Ã‚Â y hoÃƒÂ¡Ã‚ÂºÃ‚Â·c Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ thÃƒÆ’Ã‚Â´i hÃƒÂ¡Ã‚Â»Ã‚Âc');
     }
 
     return student;
@@ -154,21 +155,37 @@ export class HomeroomService {
           unexcusedAbsence: 0,
           late: 0,
         },
+        students: [],
         studentsNeedAttention: [],
         upcomingBirthdays: [],
         recentBehavior: [],
         recentEvents: [],
-        tasks: [],
+        weeklyTasks: [],
         currentWeekReview: null,
       };
     }
 
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
 
-    // Active students count
-    const studentCount = await this.prisma.studentEnrollment.count({
-      where: { classroomId, status: 'ACTIVE', student: { deletedAt: null } },
-    });
+    // Active roster is returned with the dashboard so every student can be
+    // selected when the homeroom teacher creates a behavior record.
+    const activeEnrollmentWhere = {
+      classroomId,
+      status: 'ACTIVE' as const,
+      student: { deletedAt: null },
+    };
+    const [studentCount, activeEnrollments] = await Promise.all([
+      this.prisma.studentEnrollment.count({ where: activeEnrollmentWhere }),
+      this.prisma.studentEnrollment.findMany({
+        where: activeEnrollmentWhere,
+        select: {
+          student: {
+            select: { id: true, fullName: true, initials: true, avatarColor: true },
+          },
+        },
+        orderBy: { student: { fullName: 'asc' } },
+      }),
+    ]);
 
     // Attendance Today
     const today = this.dateOnly(new Date());
@@ -235,6 +252,12 @@ export class HomeroomService {
         schoolYearId: classroom.schoolYearId,
       },
       attendanceToday,
+      students: activeEnrollments.map(({ student }) => ({
+        id: student.id,
+        fullName: student.fullName,
+        initials: student.initials,
+        avatarColor: student.avatarColor,
+      })),
       studentsNeedAttention,
       upcomingBirthdays,
       recentBehavior: recentBehavior.map((b) => ({
@@ -335,7 +358,7 @@ export class HomeroomService {
       if (unexcusedCount >= HOMEROOM_RULES.UNEXCUSED_ABSENCE_THRESHOLD) {
         reasons.push({
           type: 'ATTENDANCE',
-          description: `Nghỉ không phép ${unexcusedCount} buổi trong 30 ngày qua`,
+          description: `NghÃƒÂ¡Ã‚Â»Ã¢â‚¬Â° khÃƒÆ’Ã‚Â´ng phÃƒÆ’Ã‚Â©p ${unexcusedCount} buÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢i trong 30 ngÃƒÆ’Ã‚Â y qua`,
         });
       }
 
@@ -343,17 +366,17 @@ export class HomeroomService {
       if (lateCount >= HOMEROOM_RULES.LATE_THRESHOLD) {
         reasons.push({
           type: 'ATTENDANCE',
-          description: `Đi muộn ${lateCount} lần trong 30 ngày qua`,
+          description: `Ãƒâ€žÃ‚Âi muÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢n ${lateCount} lÃƒÂ¡Ã‚ÂºÃ‚Â§n trong 30 ngÃƒÆ’Ã‚Â y qua`,
         });
       }
 
       // 2. Assessment checks (recent needs support)
       const needsSupportAssessments = s.studentAssessments.filter((a) => a.level === 'NEEDS_SUPPORT');
       if (needsSupportAssessments.length > 0) {
-        const subjects = Array.from(new Set(needsSupportAssessments.map((a) => a.assessment?.title || 'Đánh giá'))).slice(0, 2);
+        const subjects = Array.from(new Set(needsSupportAssessments.map((a) => a.assessment?.title || 'Ãƒâ€žÃ‚ÂÃƒÆ’Ã‚Â¡nh giÃƒÆ’Ã‚Â¡'))).slice(0, 2);
         reasons.push({
           type: 'ASSESSMENT',
-          description: `Có nội dung học tập cần hỗ trợ (${subjects.join(', ')})`,
+          description: `CÃƒÆ’Ã‚Â³ nÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢i dung hÃƒÂ¡Ã‚Â»Ã‚Âc tÃƒÂ¡Ã‚ÂºÃ‚Â­p cÃƒÂ¡Ã‚ÂºÃ‚Â§n hÃƒÂ¡Ã‚Â»Ã¢â‚¬â€ trÃƒÂ¡Ã‚Â»Ã‚Â£ (${subjects.join(', ')})`,
         });
       }
 
@@ -362,7 +385,7 @@ export class HomeroomService {
       if (attentionBehaviors.length > 0) {
         reasons.push({
           type: 'BEHAVIOR',
-          description: `Có ${attentionBehaviors.length} ghi nhận nề nếp cần quan tâm đặc biệt`,
+          description: `CÃƒÆ’Ã‚Â³ ${attentionBehaviors.length} ghi nhÃƒÂ¡Ã‚ÂºÃ‚Â­n nÃƒÂ¡Ã‚Â»Ã‚Â nÃƒÂ¡Ã‚ÂºÃ‚Â¿p cÃƒÂ¡Ã‚ÂºÃ‚Â§n quan tÃƒÆ’Ã‚Â¢m Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚ÂºÃ‚Â·c biÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡t`,
         });
       }
 
@@ -370,7 +393,7 @@ export class HomeroomService {
       if (reminderBehaviors.length >= HOMEROOM_RULES.BEHAVIOR_REMINDER_THRESHOLD) {
         reasons.push({
           type: 'BEHAVIOR',
-          description: `Bị nhắc nhở nề nếp ${reminderBehaviors.length} lần trong tháng`,
+          description: `BÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¹ nhÃƒÂ¡Ã‚ÂºÃ‚Â¯c nhÃƒÂ¡Ã‚Â»Ã…Â¸ nÃƒÂ¡Ã‚Â»Ã‚Â nÃƒÂ¡Ã‚ÂºÃ‚Â¿p ${reminderBehaviors.length} lÃƒÂ¡Ã‚ÂºÃ‚Â§n trong thÃƒÆ’Ã‚Â¡ng`,
         });
       }
 
@@ -394,7 +417,7 @@ export class HomeroomService {
    */
   async getUpcomingBirthdays(classroomId: string, teacherId: string, days = 30) {
     if (!Number.isInteger(days) || days < 1 || days > 366) {
-      throw new BadRequestException('Số ngày tra cứu sinh nhật phải từ 1 đến 366');
+      throw new BadRequestException('SÃƒÂ¡Ã‚Â»Ã¢â‚¬Ëœ ngÃƒÆ’Ã‚Â y tra cÃƒÂ¡Ã‚Â»Ã‚Â©u sinh nhÃƒÂ¡Ã‚ÂºÃ‚Â­t phÃƒÂ¡Ã‚ÂºÃ‚Â£i tÃƒÂ¡Ã‚Â»Ã‚Â« 1 Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚ÂºÃ‚Â¿n 366');
     }
     await this.validateClassroomOwnership(classroomId, teacherId);
 
@@ -643,11 +666,11 @@ export class HomeroomService {
     });
 
     if (!existing) {
-      throw new NotFoundException('Không tìm thấy bản ghi nề nếp');
+      throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y bÃƒÂ¡Ã‚ÂºÃ‚Â£n ghi nÃƒÂ¡Ã‚Â»Ã‚Â nÃƒÂ¡Ã‚ÂºÃ‚Â¿p');
     }
 
     if (existing.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền chỉnh sửa bản ghi này');
+      throw new ForbiddenException('BÃƒÂ¡Ã‚ÂºÃ‚Â¡n khÃƒÆ’Ã‚Â´ng cÃƒÆ’Ã‚Â³ quyÃƒÂ¡Ã‚Â»Ã‚Ân chÃƒÂ¡Ã‚Â»Ã¢â‚¬Â°nh sÃƒÂ¡Ã‚Â»Ã‚Â­a bÃƒÂ¡Ã‚ÂºÃ‚Â£n ghi nÃƒÆ’Ã‚Â y');
     }
     await this.validateClassroomOwnership(existing.classroomId, teacherId);
 
@@ -703,11 +726,11 @@ export class HomeroomService {
     });
 
     if (!existing) {
-      throw new NotFoundException('Không tìm thấy bản ghi nề nếp');
+      throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y bÃƒÂ¡Ã‚ÂºÃ‚Â£n ghi nÃƒÂ¡Ã‚Â»Ã‚Â nÃƒÂ¡Ã‚ÂºÃ‚Â¿p');
     }
 
     if (existing.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền xóa bản ghi này');
+      throw new ForbiddenException('BÃƒÂ¡Ã‚ÂºÃ‚Â¡n khÃƒÆ’Ã‚Â´ng cÃƒÆ’Ã‚Â³ quyÃƒÂ¡Ã‚Â»Ã‚Ân xÃƒÆ’Ã‚Â³a bÃƒÂ¡Ã‚ÂºÃ‚Â£n ghi nÃƒÆ’Ã‚Â y');
     }
     await this.validateClassroomOwnership(existing.classroomId, teacherId);
 
@@ -719,7 +742,7 @@ export class HomeroomService {
       resourceId: id,
       details: { classroomId: existing.classroomId, studentId: existing.studentId },
     });
-    return { success: true, message: 'Đã xóa ghi nhận nề nếp' };
+    return { success: true, message: 'Ãƒâ€žÃ‚ÂÃƒÆ’Ã‚Â£ xÃƒÆ’Ã‚Â³a ghi nhÃƒÂ¡Ã‚ÂºÃ‚Â­n nÃƒÂ¡Ã‚Â»Ã‚Â nÃƒÂ¡Ã‚ÂºÃ‚Â¿p' };
   }
 
   /**
@@ -727,17 +750,17 @@ export class HomeroomService {
    */
   async getWeeklySummary(classroomId: string, weekNumber: number, schoolYearId: string | undefined, teacherId: string) {
     if (!Number.isInteger(weekNumber) || weekNumber < 1 || weekNumber > 54) {
-      throw new BadRequestException('Số tuần không hợp lệ');
+      throw new BadRequestException('SÃƒÂ¡Ã‚Â»Ã¢â‚¬Ëœ tuÃƒÂ¡Ã‚ÂºÃ‚Â§n khÃƒÆ’Ã‚Â´ng hÃƒÂ¡Ã‚Â»Ã‚Â£p lÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡');
     }
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
     if (schoolYearId && schoolYearId !== classroom.schoolYearId) {
-      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+      throw new BadRequestException('NÃƒâ€žÃ†â€™m hÃƒÂ¡Ã‚Â»Ã‚Âc khÃƒÆ’Ã‚Â´ng thuÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢c lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp chÃƒÂ¡Ã‚Â»Ã‚Â§ nhiÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡m Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ chÃƒÂ¡Ã‚Â»Ã‚Ân');
     }
     const syId = schoolYearId || classroom.schoolYearId;
 
     // Approximate date range for week
     const schoolYear = await this.prisma.schoolYear.findUnique({ where: { id: syId } });
-    if (!schoolYear) throw new NotFoundException('Không tìm thấy năm học');
+    if (!schoolYear) throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y nÃƒâ€žÃ†â€™m hÃƒÂ¡Ã‚Â»Ã‚Âc');
     const startDate = new Date(schoolYear.startDate);
     const weekStart = new Date(startDate);
     weekStart.setDate(weekStart.getDate() + (weekNumber - 1) * 7);
@@ -843,7 +866,7 @@ export class HomeroomService {
   async getWeeklyReview(classroomId: string, weekNumber: number, schoolYearId: string | undefined, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
     if (schoolYearId && schoolYearId !== classroom.schoolYearId) {
-      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+      throw new BadRequestException('NÃƒâ€žÃ†â€™m hÃƒÂ¡Ã‚Â»Ã‚Âc khÃƒÆ’Ã‚Â´ng thuÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢c lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp chÃƒÂ¡Ã‚Â»Ã‚Â§ nhiÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡m Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ chÃƒÂ¡Ã‚Â»Ã‚Ân');
     }
     const syId = schoolYearId || classroom.schoolYearId;
 
@@ -863,7 +886,7 @@ export class HomeroomService {
   async saveWeeklyReview(dto: SaveWeeklyReviewDto, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(dto.classroomId, teacherId);
     if (dto.schoolYearId && dto.schoolYearId !== classroom.schoolYearId) {
-      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+      throw new BadRequestException('NÃƒâ€žÃ†â€™m hÃƒÂ¡Ã‚Â»Ã‚Âc khÃƒÆ’Ã‚Â´ng thuÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢c lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp chÃƒÂ¡Ã‚Â»Ã‚Â§ nhiÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡m Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ chÃƒÂ¡Ã‚Â»Ã‚Ân');
     }
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
     for (const studentId of new Set((dto.studentComments || []).map((item) => item.studentId))) {
@@ -882,7 +905,7 @@ export class HomeroomService {
 
     if (existing && dto.version !== undefined && dto.version !== existing.version) {
       throw new ConflictException(
-        'Dữ liệu nhận xét tuần đã được cập nhật bởi một phiên làm việc khác. Vui lòng tải lại trang.',
+        'DÃƒÂ¡Ã‚Â»Ã‚Â¯ liÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡u nhÃƒÂ¡Ã‚ÂºÃ‚Â­n xÃƒÆ’Ã‚Â©t tuÃƒÂ¡Ã‚ÂºÃ‚Â§n Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ Ãƒâ€žÃ¢â‚¬ËœÃƒâ€ Ã‚Â°ÃƒÂ¡Ã‚Â»Ã‚Â£c cÃƒÂ¡Ã‚ÂºÃ‚Â­p nhÃƒÂ¡Ã‚ÂºÃ‚Â­t bÃƒÂ¡Ã‚Â»Ã…Â¸i mÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢t phiÃƒÆ’Ã‚Âªn lÃƒÆ’Ã‚Â m viÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡c khÃƒÆ’Ã‚Â¡c. Vui lÃƒÆ’Ã‚Â²ng tÃƒÂ¡Ã‚ÂºÃ‚Â£i lÃƒÂ¡Ã‚ÂºÃ‚Â¡i trang.',
       );
     }
 
@@ -935,7 +958,7 @@ export class HomeroomService {
    */
   async getMonthlySummary(classroomId: string, year: number, month: number, teacherId: string) {
     if (!Number.isInteger(year) || year < 2000 || year > 2200 || !Number.isInteger(month) || month < 1 || month > 12) {
-      throw new BadRequestException('Tháng hoặc năm báo cáo không hợp lệ');
+      throw new BadRequestException('ThÃƒÆ’Ã‚Â¡ng hoÃƒÂ¡Ã‚ÂºÃ‚Â·c nÃƒâ€žÃ†â€™m bÃƒÆ’Ã‚Â¡o cÃƒÆ’Ã‚Â¡o khÃƒÆ’Ã‚Â´ng hÃƒÂ¡Ã‚Â»Ã‚Â£p lÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡');
     }
     const classroom = await this.validateClassroomOwnership(classroomId, teacherId);
 
@@ -1084,7 +1107,7 @@ export class HomeroomService {
       studentsImproved: improvedStudents.map((student) => ({
         id: student.id,
         name: student.fullName,
-        note: 'Có ghi nhận nề nếp tích cực trong tháng',
+        note: 'CÃƒÆ’Ã‚Â³ ghi nhÃƒÂ¡Ã‚ÂºÃ‚Â­n nÃƒÂ¡Ã‚Â»Ã‚Â nÃƒÂ¡Ã‚ÂºÃ‚Â¿p tÃƒÆ’Ã‚Â­ch cÃƒÂ¡Ã‚Â»Ã‚Â±c trong thÃƒÆ’Ã‚Â¡ng',
       })),
     };
   }
@@ -1111,7 +1134,7 @@ export class HomeroomService {
   async saveMonthlyReview(dto: SaveMonthlyReviewDto, teacherId: string) {
     const classroom = await this.validateClassroomOwnership(dto.classroomId, teacherId);
     if (dto.schoolYearId && dto.schoolYearId !== classroom.schoolYearId) {
-      throw new BadRequestException('Năm học không thuộc lớp chủ nhiệm đã chọn');
+      throw new BadRequestException('NÃƒâ€žÃ†â€™m hÃƒÂ¡Ã‚Â»Ã‚Âc khÃƒÆ’Ã‚Â´ng thuÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢c lÃƒÂ¡Ã‚Â»Ã¢â‚¬Âºp chÃƒÂ¡Ã‚Â»Ã‚Â§ nhiÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡m Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ chÃƒÂ¡Ã‚Â»Ã‚Ân');
     }
     const schoolYearId = dto.schoolYearId || classroom.schoolYearId;
 
@@ -1127,7 +1150,7 @@ export class HomeroomService {
 
     if (existing && dto.version !== undefined && dto.version !== existing.version) {
       throw new ConflictException(
-        'Dữ liệu tổng kết tháng đã được cập nhật bởi một phiên làm việc khác. Vui lòng tải lại trang.',
+        'DÃƒÂ¡Ã‚Â»Ã‚Â¯ liÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡u tÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢ng kÃƒÂ¡Ã‚ÂºÃ‚Â¿t thÃƒÆ’Ã‚Â¡ng Ãƒâ€žÃ¢â‚¬ËœÃƒÆ’Ã‚Â£ Ãƒâ€žÃ¢â‚¬ËœÃƒâ€ Ã‚Â°ÃƒÂ¡Ã‚Â»Ã‚Â£c cÃƒÂ¡Ã‚ÂºÃ‚Â­p nhÃƒÂ¡Ã‚ÂºÃ‚Â­t bÃƒÂ¡Ã‚Â»Ã…Â¸i mÃƒÂ¡Ã‚Â»Ã¢â€žÂ¢t phiÃƒÆ’Ã‚Âªn lÃƒÆ’Ã‚Â m viÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡c khÃƒÆ’Ã‚Â¡c. Vui lÃƒÆ’Ã‚Â²ng tÃƒÂ¡Ã‚ÂºÃ‚Â£i lÃƒÂ¡Ã‚ÂºÃ‚Â¡i trang.',
       );
     }
 
@@ -1222,9 +1245,9 @@ export class HomeroomService {
   async updateHomeroomTask(classroomId: string, id: string, dto: UpdateHomeroomTaskDto, teacherId: string) {
     await this.validateClassroomOwnership(classroomId, teacherId);
     const existing = await this.prisma.teacherTask.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Không tìm thấy việc chủ nhiệm');
+    if (!existing) throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y viÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡c chÃƒÂ¡Ã‚Â»Ã‚Â§ nhiÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡m');
     if (existing.teacherId !== teacherId || existing.classroomId !== classroomId) {
-      throw new ForbiddenException('Bạn không có quyền cập nhật việc chủ nhiệm này');
+      throw new ForbiddenException('BÃƒÂ¡Ã‚ÂºÃ‚Â¡n khÃƒÆ’Ã‚Â´ng cÃƒÆ’Ã‚Â³ quyÃƒÂ¡Ã‚Â»Ã‚Ân cÃƒÂ¡Ã‚ÂºÃ‚Â­p nhÃƒÂ¡Ã‚ÂºÃ‚Â­t viÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡c chÃƒÂ¡Ã‚Â»Ã‚Â§ nhiÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¡m nÃƒÆ’Ã‚Â y');
     }
     const done = dto.status === undefined ? undefined : dto.status === 'COMPLETED';
     const task = await this.prisma.teacherTask.update({
@@ -1309,9 +1332,9 @@ export class HomeroomService {
   ) {
     await this.validateClassroomOwnership(classroomId, teacherId);
     const existing = await this.prisma.parentContactLog.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Không tìm thấy lần trao đổi phụ huynh');
+    if (!existing) throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y lÃƒÂ¡Ã‚ÂºÃ‚Â§n trao Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢i phÃƒÂ¡Ã‚Â»Ã‚Â¥ huynh');
     if (existing.classroomId !== classroomId || existing.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền cập nhật lần trao đổi phụ huynh này');
+      throw new ForbiddenException('BÃƒÂ¡Ã‚ÂºÃ‚Â¡n khÃƒÆ’Ã‚Â´ng cÃƒÆ’Ã‚Â³ quyÃƒÂ¡Ã‚Â»Ã‚Ân cÃƒÂ¡Ã‚ÂºÃ‚Â­p nhÃƒÂ¡Ã‚ÂºÃ‚Â­t lÃƒÂ¡Ã‚ÂºÃ‚Â§n trao Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢i phÃƒÂ¡Ã‚Â»Ã‚Â¥ huynh nÃƒÆ’Ã‚Â y');
     }
     if (dto.studentId) {
       await this.validateStudentInClassroom(dto.studentId, classroomId, teacherId);
@@ -1343,9 +1366,9 @@ export class HomeroomService {
   async deleteParentContact(classroomId: string, id: string, teacherId: string) {
     await this.validateClassroomOwnership(classroomId, teacherId);
     const existing = await this.prisma.parentContactLog.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Không tìm thấy lần trao đổi phụ huynh');
+    if (!existing) throw new NotFoundException('KhÃƒÆ’Ã‚Â´ng tÃƒÆ’Ã‚Â¬m thÃƒÂ¡Ã‚ÂºÃ‚Â¥y lÃƒÂ¡Ã‚ÂºÃ‚Â§n trao Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢i phÃƒÂ¡Ã‚Â»Ã‚Â¥ huynh');
     if (existing.classroomId !== classroomId || existing.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền xóa lần trao đổi phụ huynh này');
+      throw new ForbiddenException('BÃƒÂ¡Ã‚ÂºÃ‚Â¡n khÃƒÆ’Ã‚Â´ng cÃƒÆ’Ã‚Â³ quyÃƒÂ¡Ã‚Â»Ã‚Ân xÃƒÆ’Ã‚Â³a lÃƒÂ¡Ã‚ÂºÃ‚Â§n trao Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢i phÃƒÂ¡Ã‚Â»Ã‚Â¥ huynh nÃƒÆ’Ã‚Â y');
     }
     await this.prisma.parentContactLog.delete({ where: { id } });
     await this.auditService?.log({
@@ -1355,7 +1378,7 @@ export class HomeroomService {
       resourceId: id,
       details: { classroomId },
     });
-    return { success: true, message: 'Đã xóa lịch sử trao đổi phụ huynh' };
+    return { success: true, message: 'Ãƒâ€žÃ‚ÂÃƒÆ’Ã‚Â£ xÃƒÆ’Ã‚Â³a lÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¹ch sÃƒÂ¡Ã‚Â»Ã‚Â­ trao Ãƒâ€žÃ¢â‚¬ËœÃƒÂ¡Ã‚Â»Ã¢â‚¬Â¢i phÃƒÂ¡Ã‚Â»Ã‚Â¥ huynh' };
   }
 
   /**

@@ -98,6 +98,21 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
     jest.clearAllMocks();
   });
 
+  describe('homeroom assignment', () => {
+    it('rejects assigning a classroom from a non-current school year', async () => {
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce({
+        ...mockClassroomA,
+        schoolYearId: mockSchoolYearOther.id,
+        schoolYear: mockSchoolYearOther,
+      });
+
+      await expect(service.setAsHomeroom('class-a', 'teacher-a')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrisma.classroom.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('create', () => {
     it('should create classroom successfully when all validations pass', async () => {
       mockPrisma.schoolYear.findUnique.mockResolvedValueOnce(mockSchoolYearCurrent);
