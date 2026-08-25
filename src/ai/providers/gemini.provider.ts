@@ -128,7 +128,7 @@ export class GeminiProvider implements AiProvider {
     return this.getEnvNumber('GEMINI_MAX_OUTPUT_TOKENS', this.DEFAULT_MAX_OUTPUT_TOKENS);
   }
 
-  categorizeError(error: any): string {
+  categorizeError(error: any): { category: string; status: number; code: string; message: string } {
     if (
       error instanceof RequestTimeoutException ||
       error?.name === 'RequestTimeoutException' ||
@@ -136,13 +136,50 @@ export class GeminiProvider implements AiProvider {
       error?.message?.includes('timed out') ||
       error?.message?.includes('timeout')
     ) {
-      return 'TIMEOUT';
+      return {
+        category: 'TIMEOUT',
+        status: 408,
+        code: 'AI_TIMEOUT',
+        message: 'Yêu cầu AI vượt quá thời gian cho phép. Vui lòng thử lại.',
+      };
     }
+
     const msg = String(error?.message || '').toLowerCase();
-    const status = error?.status || error?.statusCode;
-    if (status === 429 || msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted')) {
-      return 'QUOTA_EXCEEDED';
+    const status = Number(error?.status || error?.statusCode) || 0;
+
+    if (
+      status === 429 ||
+      msg.includes('429') ||
+      msg.includes('quota') ||
+      msg.includes('resource_exhausted') ||
+      msg.includes('rate_limit') ||
+      msg.includes('rate limit')
+    ) {
+      return {
+        category: 'QUOTA_EXCEEDED',
+        status: 429,
+        code: 'AI_RATE_LIMITED',
+        message: 'Hệ thống AI Gemini đã vượt quá giới hạn yêu cầu (Rate limit / Quota). Vui lòng thử lại sau.',
+      };
     }
+
+    if (
+      status === 503 ||
+      msg.includes('503') ||
+      msg.includes('unavailable') ||
+      msg.includes('high demand') ||
+      msg.includes('service unavailable') ||
+      msg.includes('capacity') ||
+      msg.includes('overloaded')
+    ) {
+      return {
+        category: 'SERVICE_UNAVAILABLE',
+        status: 503,
+        code: 'AI_PROVIDER_UNAVAILABLE',
+        message: 'Dịch vụ AI đang tạm quá tải. Vui lòng thử lại sau.',
+      };
+    }
+
     if (
       status === 404 ||
       msg.includes('not found') ||
@@ -152,26 +189,113 @@ export class GeminiProvider implements AiProvider {
       msg.includes('shutdown') ||
       msg.includes('retired')
     ) {
-      return 'MODEL_NOT_FOUND';
+      return {
+        category: 'MODEL_NOT_FOUND',
+        status: 404,
+        code: 'AI_MODEL_NOT_FOUND',
+        message: 'Mô hình AI hiện không khả dụng. Vui lòng thử lại sau.',
+      };
     }
+
     if (
       msg.includes('malformed json') ||
       msg.includes('json.parse') ||
       msg.includes('empty response') ||
       msg.includes('không đúng định dạng')
     ) {
-      return 'PARSE_ERROR';
+      return {
+        category: 'PARSE_ERROR',
+        status: 503,
+        code: 'AI_PARSE_ERROR',
+        message: 'AI trả về dữ liệu không đúng định dạng. Vui lòng thử lại.',
+      };
     }
+
     if (status === 400 || msg.includes('invalid argument') || msg.includes('prompt is too')) {
-      return 'INVALID_INPUT';
+      return {
+        category: 'INVALID_INPUT',
+        status: 400,
+        code: 'AI_INVALID_REQUEST',
+        message: 'Yêu cầu không hợp lệ. Vui lòng kiểm tra lại nội dung.',
+      };
     }
-    if (status === 401 || status === 403 || msg.includes('api_key_invalid') || msg.includes('permission_denied')) {
-      return 'AUTH_ERROR';
+
+    if (
+      status === 401 ||
+      status === 403 ||
+      msg.includes('api_key_invalid') ||
+      msg.includes('permission_denied') ||
+      msg.includes('unauthorized') ||
+      msg.includes('forbidden')
+    ) {
+      return {
+        category: 'AUTH_ERROR',
+        status: 503,
+        code: 'AI_AUTH_ERROR',
+        message: 'Khóa API Gemini chưa hợp lệ hoặc chưa được cấp quyền.',
+      };
     }
-    if (status === 503 || msg.includes('service unavailable')) {
-      return 'SERVICE_UNAVAILABLE';
+
+    return {
+      category: 'UPSTREAM_ERROR',
+      status: status || 503,
+      code: 'AI_UPSTREAM_ERROR',
+      message: 'Không thể tạo nội dung lúc này. Vui lòng thử lại.',
+    };
+  }
+
+  private async sleepWithBackoff(attempt: number, baseMs: number = 1000): Promise<void> {
+    const backoff = baseMs * Math.pow(2, attempt);
+    const jitter = Math.floor(Math.random() * 300);
+    await new Promise((resolve) => setTimeout(resolve, backoff + jitter));
+  }
+
+  private async executeWithModelRetry<T>(
+    operation: string,
+    model: string,
+    work: () => Promise<T>,
+    maxRetries: number = 2,
+  ): Promise<T> {
+    let lastError: any;
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      const startTime = Date.now();
+      try {
+        const result = await work();
+        const durationMs = Date.now() - startTime;
+        this.logger.log(
+          `[AI] model=${model} attempt=${attempt} upstreamStatus=200 upstreamCode=SUCCESS durationMs=${durationMs}`,
+        );
+        return result;
+      } catch (err: any) {
+        lastError = err;
+        const durationMs = Date.now() - startTime;
+        const info = this.categorizeError(err);
+        this.logger.warn(
+          `[AI] model=${model} attempt=${attempt} upstreamStatus=${info.status} upstreamCode=${info.code} durationMs=${durationMs}`,
+        );
+
+        // Never retry on 429, 400, 404, 401/403, or TIMEOUT
+        if (
+          info.category === 'QUOTA_EXCEEDED' ||
+          info.category === 'INVALID_INPUT' ||
+          info.category === 'MODEL_NOT_FOUND' ||
+          info.category === 'AUTH_ERROR' ||
+          info.category === 'TIMEOUT' ||
+          err instanceof RequestTimeoutException
+        ) {
+          throw err;
+        }
+
+        // Retry 503 or transient upstream error up to maxRetries
+        if (attempt <= maxRetries) {
+          this.logger.log(
+            `[AI] model=${model} 503 backoff retry (${attempt}/${maxRetries})...`,
+          );
+          await this.sleepWithBackoff(attempt - 1, 1000);
+        }
+      }
     }
-    return 'UPSTREAM_ERROR';
+    throw lastError;
   }
 
   private assertClientReady(operation: string) {
@@ -179,18 +303,22 @@ export class GeminiProvider implements AiProvider {
       this.logger.warn(
         `[AI] operation=${operation} model=none elapsedMs=0 status=UNAVAILABLE errorCategory=UNCONFIGURED_API_KEY`,
       );
-      throw new ServiceUnavailableException(
-        'Hệ thống AI chưa được cấu hình GEMINI_API_KEY ở backend. Vui lòng cấu hình khóa API trong file .env',
-      );
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: 'AI_AUTH_ERROR',
+        message: 'Hệ thống AI chưa được cấu hình GEMINI_API_KEY ở backend. Vui lòng cấu hình khóa API trong file .env',
+      });
     }
   }
 
   private assertPromptSize(prompt: string) {
     const maxChars = this.getMaxInputChars();
     if (prompt && prompt.length > maxChars) {
-      throw new BadRequestException(
-        `Nội dung gửi tới AI vượt quá giới hạn cho phép (${maxChars} ký tự). Vui lòng rút gọn yêu cầu hoặc tệp nguồn.`,
-      );
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'AI_INVALID_REQUEST',
+        message: `Nội dung gửi tới AI vượt quá giới hạn cho phép (${maxChars} ký tự). Vui lòng rút gọn yêu cầu hoặc tệp nguồn.`,
+      });
     }
   }
 
@@ -219,9 +347,11 @@ export class GeminiProvider implements AiProvider {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
         reject(
-          new RequestTimeoutException(
-            `Yêu cầu AI (${operation}) vượt quá thời gian cho phép (${Math.round(timeoutMs / 1000)} giây)`,
-          ),
+          new RequestTimeoutException({
+            statusCode: 408,
+            code: 'AI_TIMEOUT',
+            message: `Yêu cầu AI (${operation}) vượt quá thời gian cho phép (${Math.round(timeoutMs / 1000)} giây)`,
+          }),
         );
       }, timeoutMs);
     });
@@ -234,16 +364,14 @@ export class GeminiProvider implements AiProvider {
 
   async generateStructured<T>(options: GenerateStructuredOptions<T>): Promise<T> {
     const { operation, prompt, schema, validate, inlineParts } = options;
-    const retryCount = options.retryCount ?? 1;
     this.assertClientReady(operation);
     this.assertPromptSize(prompt);
 
-    const modelToUse = this.getModelName();
+    const primaryModel = this.getModelName();
     const fallbackModel = this.getFallbackModelName();
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation(operation);
-    const startTime = Date.now();
 
-    const runCall = async (model: string): Promise<T> => {
+    const callModel = (model: string) => async (): Promise<T> => {
       const response = await this.withTimeout(operation, timeoutMs, () =>
         this.aiClient!.models.generateContent({
           model,
@@ -275,71 +403,44 @@ export class GeminiProvider implements AiProvider {
 
     let lastError: any;
     try {
-      const result = await runCall(modelToUse);
-      this.logger.log(
-        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
-      );
-      return result;
-    } catch (primaryError: any) {
-      lastError = primaryError;
-      const errorCategory = this.categorizeError(primaryError);
-      const upstreamStatus =
-        primaryError?.status ||
-        primaryError?.statusCode ||
-        (String(primaryError?.message || '').includes('503') ? 503 : undefined);
+      return await this.executeWithModelRetry(operation, primaryModel, callModel(primaryModel), 2);
+    } catch (primaryErr: any) {
+      lastError = primaryErr;
+      const info = this.categorizeError(primaryErr);
 
-      this.logger.warn(
-        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory} upstreamStatus=${upstreamStatus || 'unknown'}`,
-      );
-
-      if (errorCategory === 'TIMEOUT' || primaryError instanceof RequestTimeoutException) {
-        return this.mapAndThrowError(primaryError, operation);
+      if (
+        info.category === 'INVALID_INPUT' ||
+        info.category === 'AUTH_ERROR' ||
+        info.category === 'QUOTA_EXCEEDED'
+      ) {
+        return this.mapAndThrowError(primaryErr, operation, primaryModel);
       }
 
-      if (fallbackModel && fallbackModel !== modelToUse && errorCategory !== 'INVALID_INPUT') {
-        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to model=${fallbackModel}`);
+      if (fallbackModel && fallbackModel !== primaryModel) {
+        this.logger.warn(
+          `[AI] operation=${operation} primary model=${primaryModel} failed. Falling back to model=${fallbackModel}`,
+        );
         try {
-          const fallbackStartTime = Date.now();
-          const fallbackResult = await runCall(fallbackModel);
-          this.logger.log(
-            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - fallbackStartTime} status=SUCCESS`,
-          );
-          return fallbackResult;
-        } catch (fallbackError: any) {
-          lastError = fallbackError;
-          const fallbackCategory = this.categorizeError(fallbackError);
-          const fallbackStatus = fallbackError?.status || fallbackError?.statusCode;
-          this.logger.error(
-            `[AI] operation=${operation} model=${fallbackModel} status=FAILED errorCategory=${fallbackCategory} upstreamStatus=${fallbackStatus || 'unknown'}`,
-          );
+          return await this.executeWithModelRetry(operation, fallbackModel, callModel(fallbackModel), 2);
+        } catch (fallbackErr: any) {
+          lastError = fallbackErr;
         }
       }
     }
 
-    if (
-      retryCount > 0 &&
-      this.categorizeError(lastError) !== 'AUTH_ERROR' &&
-      this.categorizeError(lastError) !== 'INVALID_INPUT'
-    ) {
-      this.logger.warn(`[AI] operation=${operation} retrying generation (${retryCount} attempt left)...`);
-      return this.generateStructured({ ...options, retryCount: retryCount - 1 });
-    }
-
-    return this.mapAndThrowError(lastError, operation);
+    return this.mapAndThrowError(lastError, operation, primaryModel);
   }
 
   async generateText(options: GenerateTextOptions): Promise<string> {
     const { operation, prompt, inlineParts } = options;
-    const retryCount = options.retryCount ?? 1;
     this.assertClientReady(operation);
     this.assertPromptSize(prompt);
 
-    const modelToUse = this.getModelName();
+    const primaryModel = this.getModelName();
     const fallbackModel = this.getFallbackModelName();
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation(operation);
-    const startTime = Date.now();
 
-    const runCall = async (model: string): Promise<string> => {
+    const callModel = (model: string) => async (): Promise<string> => {
       const response = await this.withTimeout(operation, timeoutMs, () =>
         this.aiClient!.models.generateContent({
           model,
@@ -360,88 +461,83 @@ export class GeminiProvider implements AiProvider {
 
     let lastError: any;
     try {
-      const result = await runCall(modelToUse);
-      this.logger.log(
-        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
-      );
-      return result;
-    } catch (primaryError: any) {
-      lastError = primaryError;
-      const errorCategory = this.categorizeError(primaryError);
-      const upstreamStatus =
-        primaryError?.status ||
-        primaryError?.statusCode ||
-        (String(primaryError?.message || '').includes('503') ? 503 : undefined);
+      return await this.executeWithModelRetry(operation, primaryModel, callModel(primaryModel), 2);
+    } catch (primaryErr: any) {
+      lastError = primaryErr;
+      const info = this.categorizeError(primaryErr);
 
-      this.logger.warn(
-        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory} upstreamStatus=${upstreamStatus || 'unknown'}`,
-      );
-
-      if (errorCategory === 'TIMEOUT' || primaryError instanceof RequestTimeoutException) {
-        return this.mapAndThrowError(primaryError, operation);
+      if (
+        info.category === 'INVALID_INPUT' ||
+        info.category === 'AUTH_ERROR' ||
+        info.category === 'QUOTA_EXCEEDED'
+      ) {
+        return this.mapAndThrowError(primaryErr, operation, primaryModel);
       }
 
-      if (fallbackModel && fallbackModel !== modelToUse && errorCategory !== 'INVALID_INPUT') {
-        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to model=${fallbackModel}`);
+      if (fallbackModel && fallbackModel !== primaryModel) {
+        this.logger.warn(
+          `[AI] operation=${operation} primary model=${primaryModel} failed. Falling back to model=${fallbackModel}`,
+        );
         try {
-          const fallbackStartTime = Date.now();
-          const fallbackResult = await runCall(fallbackModel);
-          this.logger.log(
-            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - fallbackStartTime} status=SUCCESS`,
-          );
-          return fallbackResult;
-        } catch (fallbackError: any) {
-          lastError = fallbackError;
-          const fallbackCategory = this.categorizeError(fallbackError);
-          const fallbackStatus = fallbackError?.status || fallbackError?.statusCode;
-          this.logger.error(
-            `[AI] operation=${operation} model=${fallbackModel} status=FAILED errorCategory=${fallbackCategory} upstreamStatus=${fallbackStatus || 'unknown'}`,
-          );
+          return await this.executeWithModelRetry(operation, fallbackModel, callModel(fallbackModel), 2);
+        } catch (fallbackErr: any) {
+          lastError = fallbackErr;
         }
       }
     }
 
-    if (
-      retryCount > 0 &&
-      this.categorizeError(lastError) !== 'AUTH_ERROR' &&
-      this.categorizeError(lastError) !== 'INVALID_INPUT'
-    ) {
-      return this.generateText({ ...options, retryCount: retryCount - 1 });
-    }
-
-    return this.mapAndThrowError(lastError, operation);
+    return this.mapAndThrowError(lastError, operation, primaryModel);
   }
 
-  private mapAndThrowError(error: any, operation: string): never {
-    const category = this.categorizeError(error);
-    if (category === 'TIMEOUT' || error instanceof RequestTimeoutException) {
-      throw error instanceof RequestTimeoutException
-        ? error
-        : new RequestTimeoutException(`Yêu cầu AI (${operation}) vượt quá thời gian cho phép. Vui lòng thử lại.`);
+  private mapAndThrowError(error: any, operation: string, model: string): never {
+    const info = this.categorizeError(error);
+
+    if (info.category === 'TIMEOUT' || error instanceof RequestTimeoutException) {
+      throw new RequestTimeoutException({
+        statusCode: 408,
+        code: 'AI_TIMEOUT',
+        message: `Yêu cầu AI (${operation}) vượt quá thời gian cho phép. Vui lòng thử lại.`,
+      });
     }
-    if (category === 'INVALID_INPUT' || error instanceof BadRequestException) {
-      throw error instanceof BadRequestException
-        ? error
-        : new BadRequestException('Yêu cầu không hợp lệ. Vui lòng kiểm tra lại nội dung.');
+
+    if (info.category === 'INVALID_INPUT' || error instanceof BadRequestException) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'AI_INVALID_REQUEST',
+        message: 'Yêu cầu không hợp lệ. Vui lòng kiểm tra lại nội dung.',
+      });
     }
-    if (category === 'AUTH_ERROR') {
-      throw new ServiceUnavailableException('Khóa API Gemini chưa hợp lệ hoặc chưa được cấp quyền.');
+
+    if (info.category === 'QUOTA_EXCEEDED') {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: 'AI_RATE_LIMITED',
+        message: 'Hệ thống AI Gemini đã vượt quá giới hạn yêu cầu (Rate limit / Quota). Vui lòng thử lại sau.',
+      });
     }
-    if (category === 'QUOTA_EXCEEDED') {
-      throw new ServiceUnavailableException(
-        'Hệ thống AI Gemini tạm thời quá tải hoặc hết hạn mức. Vui lòng thử lại sau giây lát.',
-      );
+
+    if (info.category === 'AUTH_ERROR') {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: 'AI_AUTH_ERROR',
+        message: 'Khóa API Gemini chưa hợp lệ hoặc chưa được cấp quyền.',
+      });
     }
-    if (category === 'MODEL_NOT_FOUND') {
-      throw new ServiceUnavailableException('Mô hình AI hiện không khả dụng. Vui lòng thử lại sau.');
+
+    if (info.category === 'MODEL_NOT_FOUND') {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: 'AI_MODEL_NOT_FOUND',
+        message: `Mô hình AI (${model}) hiện không khả dụng. Vui lòng thử lại sau.`,
+      });
     }
-    if (category === 'SERVICE_UNAVAILABLE') {
-      throw new ServiceUnavailableException('Dịch vụ AI Gemini hiện đang quá tải tạm thời. Vui lòng thử lại sau.');
-    }
-    if (category === 'PARSE_ERROR') {
-      throw new ServiceUnavailableException('AI trả về dữ liệu không đúng định dạng. Vui lòng thử lại.');
-    }
-    throw new ServiceUnavailableException('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
+
+    // Default 503 for temporary overload / service unavailable
+    throw new ServiceUnavailableException({
+      statusCode: 503,
+      code: 'AI_PROVIDER_UNAVAILABLE',
+      message: 'Dịch vụ AI đang tạm quá tải. Vui lòng thử lại sau.',
+    });
   }
 
   async generateImage(options: GenerateImageOptions): Promise<GeneratedImage> {
@@ -535,7 +631,9 @@ export class GeminiProvider implements AiProvider {
 
     const mapAndThrow = (error: any, usedModel: string): never => {
       model = usedModel;
-      if (error instanceof BadRequestException && this.categorizeError(error) === 'INVALID_INPUT') {
+      const { category, status: upstreamStatus } = this.categorizeError(error);
+
+      if (error instanceof BadRequestException && category === 'INVALID_INPUT') {
         this.logImageEvent({
           model,
           stage,
@@ -545,9 +643,6 @@ export class GeminiProvider implements AiProvider {
         });
         throw error;
       }
-
-      const category = this.categorizeError(error);
-      const upstreamStatus = Number(error?.status || error?.statusCode) || 0;
 
       if (category === 'TIMEOUT' || error instanceof RequestTimeoutException) {
         this.logImageEvent({
@@ -628,11 +723,11 @@ export class GeminiProvider implements AiProvider {
       });
       return result;
     } catch (error: any) {
-      if (error instanceof RequestTimeoutException || this.categorizeError(error) === 'TIMEOUT') {
+      const { category } = this.categorizeError(error);
+      if (error instanceof RequestTimeoutException || category === 'TIMEOUT') {
         return mapAndThrow(error, model);
       }
 
-      const category = this.categorizeError(error);
       const fallbackModel = this.getImageFallbackModelName();
       const shouldFallback =
         fallbackModel &&

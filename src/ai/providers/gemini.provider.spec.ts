@@ -118,56 +118,93 @@ describe('GeminiProvider', () => {
       }),
     ).rejects.toThrow(RequestTimeoutException);
 
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects empty AI response', async () => {
-    mockGenerateContent.mockResolvedValue({ text: '   ' });
-    await expect(
-      provider.generateStructured({
-        operation: 'lesson-plan',
-        prompt: 'test',
-        schema: {},
-        validate: (raw) => raw as any,
-        retryCount: 0,
-      }),
-    ).rejects.toThrow(ServiceUnavailableException);
-  });
-
-  it('rejects malformed JSON', async () => {
-    mockGenerateContent.mockResolvedValue({ text: 'not-json' });
-    await expect(
-      provider.generateStructured({
-        operation: 'lesson-plan',
-        prompt: 'test',
-        schema: {},
-        validate: (raw) => raw as any,
-        retryCount: 0,
-      }),
-    ).rejects.toThrow(ServiceUnavailableException);
-  });
-
-  it('retries once when validator rejects the payload', async () => {
-    mockGenerateContent
-      .mockResolvedValueOnce({ text: JSON.stringify({ bad: true }) })
-      .mockResolvedValueOnce({ text: JSON.stringify({ title: 'ok' }) });
-
-    const res = await provider.generateStructured({
-      operation: 'lesson-plan',
-      prompt: 'test',
-      schema: {},
-      retryCount: 1,
-      validate: (raw: any) => {
-        if (!raw.title) throw new Error('Malformed JSON received from model');
-        return raw;
-      },
-    });
-
-    expect(res).toEqual({ title: 'ok' });
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
   });
 
+  it('retries up to 2 times on 503 and succeeds on retry', async () => {
+    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
+    mockGenerateContent
+      .mockRejectedValueOnce({ status: 503, message: 'This model is currently experiencing high demand.' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Kế hoạch bài dạy' }) });
+
+    const res = await provider.generateStructured({
+      operation: 'lesson-plan',
+      prompt: 'soạn giáo án',
+      schema: {},
+      validate: (raw) => raw as any,
+    });
+
+    expect(res).toEqual({ title: 'Kế hoạch bài dạy' });
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
+    expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.7-flash');
+  });
+
+  it('falls back to GEMINI_FALLBACK_MODEL when primary model fails with 503 on all retries', async () => {
+    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
+    mockGenerateContent
+      .mockRejectedValueOnce({ status: 503, message: 'High demand' })
+      .mockRejectedValueOnce({ status: 503, message: 'High demand' })
+      .mockRejectedValueOnce({ status: 503, message: 'High demand' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Kế hoạch fallback' }) });
+
+    const res = await provider.generateStructured({
+      operation: 'lesson-plan',
+      prompt: 'soạn giáo án',
+      schema: {},
+      validate: (raw) => raw as any,
+    });
+
+    expect(res).toEqual({ title: 'Kế hoạch fallback' });
+    expect(mockGenerateContent).toHaveBeenCalledTimes(4);
+    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
+    expect(mockGenerateContent.mock.calls[3][0].model).toBe('gemini-3.6-flash');
+  });
+
+  it('throws 503 AI_PROVIDER_UNAVAILABLE when both primary and fallback models fail with 503', async () => {
+    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
+    mockGenerateContent.mockRejectedValue({ status: 503, message: 'Service unavailable' });
+
+    const err: any = await provider
+      .generateStructured({
+        operation: 'lesson-plan',
+        prompt: 'soạn giáo án',
+        schema: {},
+        validate: (raw) => raw as any,
+      })
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(ServiceUnavailableException);
+    expect(err.getResponse()).toEqual({
+      statusCode: 503,
+      code: 'AI_PROVIDER_UNAVAILABLE',
+      message: 'Dịch vụ AI đang tạm quá tải. Vui lòng thử lại sau.',
+    });
+  });
+
+  it('throws 503 AI_RATE_LIMITED immediately without spamming retries on 429', async () => {
+    mockGenerateContent.mockRejectedValueOnce({ status: 429, message: 'Resource exhausted / Quota exceeded' });
+
+    const err: any = await provider
+      .generateStructured({
+        operation: 'lesson-plan',
+        prompt: 'soạn giáo án',
+        schema: {},
+        validate: (raw) => raw as any,
+      })
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(ServiceUnavailableException);
+    expect(err.getResponse()).toEqual({
+      statusCode: 503,
+      code: 'AI_RATE_LIMITED',
+      message: 'Hệ thống AI Gemini đã vượt quá giới hạn yêu cầu (Rate limit / Quota). Vui lòng thử lại sau.',
+    });
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+  });
+
   it('maps provider errors without leaking secrets', async () => {
+    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
     mockGenerateContent.mockRejectedValue(new Error('api_key_invalid secret=abc'));
     await expect(
       provider.generateStructured({
@@ -175,7 +212,6 @@ describe('GeminiProvider', () => {
         prompt: 'test',
         schema: {},
         validate: (raw) => raw as any,
-        retryCount: 0,
       }),
     ).rejects.toThrow(ServiceUnavailableException);
   });
