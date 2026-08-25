@@ -59,9 +59,221 @@ export class NotificationsService {
   }
 
   /**
+   * Idempotently generates smart reminders for the teacher (Attendance, Schedule, Birthday, Tasks, Worksheets)
+   */
+  async generateTeacherReminders(userId: string, providedTeacherId?: string) {
+    try {
+      let teacherId = providedTeacherId;
+      if (!teacherId) {
+        const teacher = await this.prisma.teacher.findUnique({
+          where: { userId },
+          select: { id: true },
+        });
+        teacherId = teacher?.id;
+      }
+
+      if (!teacherId) return;
+
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+      const todayStr = todayStart.toISOString().split('T')[0];
+
+      // Fetch today's existing notifications to ensure 100% idempotency
+      const existingToday = await this.prisma.notification.findMany({
+        where: {
+          userId,
+          createdAt: { gte: todayStart },
+        },
+        select: { title: true, link: true },
+      });
+      const existingKeySet = new Set(existingToday.map((n) => `${n.title}|${n.link || ''}`));
+
+      const notificationsToCreate: Array<{
+        title: string;
+        message: string;
+        type: NotificationType;
+        link: string;
+      }> = [];
+
+      // 1. Check Attendance: homeroom & teaching classrooms without attendance session today
+      const classrooms = await this.prisma.classroom.findMany({
+        where: {
+          deletedAt: null,
+          isActive: true,
+          OR: [{ teacherId }, { homeroomTeacherId: teacherId }],
+        },
+        include: {
+          attendanceSessions: {
+            where: {
+              attendanceDate: {
+                gte: todayStart,
+                lte: todayEnd,
+              },
+            },
+          },
+        },
+      });
+
+      for (const c of classrooms) {
+        if (!c.attendanceSessions.length) {
+          const title = `Bạn chưa điểm danh lớp ${c.name} hôm nay`;
+          const link = `/homeroom?tab=attendance&classroomId=${c.id}`;
+          if (!existingKeySet.has(`${title}|${link}`)) {
+            notificationsToCreate.push({
+              title,
+              message: `Hôm nay bạn chưa có phiên điểm danh nào cho lớp ${c.name}. Nhấn để điểm danh cho học sinh.`,
+              type: NotificationType.HOMEROOM,
+              link,
+            });
+            existingKeySet.add(`${title}|${link}`);
+          }
+        }
+      }
+
+      // 2. Check Upcoming Schedules for Today
+      const todaySchedules = await this.prisma.schedule.findMany({
+        where: {
+          teacherId,
+          deletedAt: null,
+          plannedDate: {
+            gte: todayStart,
+            lte: todayEnd,
+          },
+        },
+        include: {
+          classroom: { select: { name: true } },
+        },
+        orderBy: { startTime: 'asc' },
+      });
+
+      for (const s of todaySchedules) {
+        const title = `Tiết ${s.title || 'dạy'} lớp ${s.classroom?.name || ''} lúc ${s.startTime}`;
+        const link = `/schedule`;
+        if (!existingKeySet.has(`${title}|${link}`)) {
+          notificationsToCreate.push({
+            title,
+            message: `Tiết dạy dự kiến bắt đầu lúc ${s.startTime} tại phòng ${s.room || 'học'}.`,
+            type: NotificationType.ASSIGNMENT,
+            link,
+          });
+          existingKeySet.add(`${title}|${link}`);
+        }
+      }
+
+      // 3. Check Student Birthdays in Next 3 Days
+      const activeStudents = await this.prisma.student.findMany({
+        where: {
+          deletedAt: null,
+          dateOfBirth: { not: null },
+          studentEnrollments: {
+            some: {
+              status: 'ACTIVE',
+              classroom: {
+                OR: [{ teacherId }, { homeroomTeacherId: teacherId }],
+              },
+            },
+          },
+        },
+        select: {
+          id: true,
+          fullName: true,
+          dateOfBirth: true,
+          studentEnrollments: {
+            where: {
+              status: 'ACTIVE',
+              classroom: {
+                OR: [{ teacherId }, { homeroomTeacherId: teacherId }],
+              },
+            },
+            select: { classroom: { select: { name: true } } },
+            take: 1,
+          },
+        },
+      });
+
+      const currentMonth = now.getMonth();
+      const currentDay = now.getDate();
+
+      for (const st of activeStudents) {
+        if (!st.dateOfBirth) continue;
+        const dob = new Date(st.dateOfBirth);
+        const bMonth = dob.getMonth();
+        const bDay = dob.getDate();
+
+        // Check if birthday is today or within next 3 days
+        if (bMonth === currentMonth) {
+          const diffDays = bDay - currentDay;
+          if (diffDays >= 0 && diffDays <= 3) {
+            const className = st.studentEnrollments?.[0]?.classroom?.name || '';
+            const dayText = diffDays === 0 ? 'hôm nay' : `sau ${diffDays} ngày (${bDay}/${bMonth + 1})`;
+            const title = `Sinh nhật học sinh ${st.fullName} ${dayText}`;
+            const link = `/homeroom?tab=students`;
+            if (!existingKeySet.has(`${title}|${link}`)) {
+              notificationsToCreate.push({
+                title,
+                message: `Học sinh ${st.fullName} (Lớp ${className}) có ngày sinh nhật ${dayText}.`,
+                type: NotificationType.ENROLLMENT,
+                link,
+              });
+              existingKeySet.add(`${title}|${link}`);
+            }
+          }
+        }
+      }
+
+      // 4. Check Pending Tasks Due Today or Overdue
+      const dueTasks = await this.prisma.teacherTask.findMany({
+        where: {
+          teacherId,
+          done: false,
+          OR: [
+            { dueDate: { lte: todayStr } },
+            { taskDate: { lte: todayStr } },
+          ],
+        },
+        take: 3,
+      });
+
+      for (const t of dueTasks) {
+        const title = `Việc cần làm đến hạn: ${t.title}`;
+        const link = `/homeroom?tab=tasks`;
+        if (!existingKeySet.has(`${title}|${link}`)) {
+          notificationsToCreate.push({
+            title,
+            message: `Công việc "${t.title}" đã đến hạn hoàn thành.`,
+            type: NotificationType.TASK,
+            link,
+          });
+          existingKeySet.add(`${title}|${link}`);
+        }
+      }
+
+      // Insert all generated notifications
+      if (notificationsToCreate.length > 0) {
+        await this.prisma.notification.createMany({
+          data: notificationsToCreate.map((n) => ({
+            userId,
+            title: n.title,
+            message: n.message,
+            type: n.type,
+            link: n.link,
+            isRead: false,
+          })),
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`Error generating teacher reminders: ${err?.message}`);
+    }
+  }
+
+  /**
    * Get user's notifications with pagination & filters
    */
-  async getUserNotifications(userId: string, query: NotificationQueryDto) {
+  async getUserNotifications(userId: string, teacherId: string | undefined, query: NotificationQueryDto) {
+    // Generate latest smart reminders idempotently
+    await this.generateTeacherReminders(userId, teacherId);
+
     const page = Math.max(1, query.page || 1);
     const pageSize = Math.min(Math.max(1, query.pageSize || 20), 100);
     const skip = (page - 1) * pageSize;
@@ -98,7 +310,8 @@ export class NotificationsService {
   /**
    * Get total unread count for badge
    */
-  async getUnreadCount(userId: string): Promise<{ count: number }> {
+  async getUnreadCount(userId: string, teacherId?: string): Promise<{ count: number }> {
+    await this.generateTeacherReminders(userId, teacherId);
     const count = await this.prisma.notification.count({
       where: { userId, isRead: false },
     });

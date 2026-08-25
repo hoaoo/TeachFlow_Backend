@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSchoolYearDto } from './dto/create-school-year.dto';
 import { UpdateSchoolYearDto } from './dto/update-school-year.dto';
+import { RolloverSchoolYearDto } from './dto/rollover-school-year.dto';
 
 @Injectable()
 export class SchoolYearsService {
@@ -227,6 +228,164 @@ export class SchoolYearsService {
           semesters: true,
         },
       });
+    });
+  }
+
+  async closeSchoolYear(id: string) {
+    const existing = await this.findOne(id);
+
+    return this.prisma.schoolYear.update({
+      where: { id },
+      data: {
+        isActive: false,
+        isCurrent: false,
+      },
+      include: {
+        semesters: true,
+      },
+    });
+  }
+
+  async rolloverSchoolYear(dto: RolloverSchoolYearDto, scopedTeacherId?: string) {
+    const sourceYear = await this.findOne(dto.sourceSchoolYearId);
+
+    const startDate = new Date(dto.startDate);
+    const endDate = new Date(dto.endDate);
+
+    if (startDate >= endDate) {
+      throw new BadRequestException('Ngày bắt đầu năm học mới phải trước ngày kết thúc');
+    }
+
+    const duplicateName = await this.prisma.schoolYear.findUnique({
+      where: { name: dto.name.trim() },
+    });
+
+    if (duplicateName) {
+      throw new ConflictException(`Năm học "${dto.name}" đã tồn tại trong hệ thống`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. If set as current, unset current flag on existing years
+      if (dto.setAsCurrent) {
+        await tx.schoolYear.updateMany({
+          where: { isCurrent: true },
+          data: { isCurrent: false },
+        });
+      }
+
+      // 2. If closeSourceYear, mark source school year as closed/inactive
+      if (dto.closeSourceYear) {
+        await tx.schoolYear.update({
+          where: { id: dto.sourceSchoolYearId },
+          data: { isCurrent: false, isActive: false },
+        });
+      }
+
+      // 3. Create the new SchoolYear
+      const newYear = await tx.schoolYear.create({
+        data: {
+          name: dto.name.trim(),
+          startDate,
+          endDate,
+          isCurrent: dto.setAsCurrent !== undefined ? dto.setAsCurrent : true,
+          isActive: true,
+          semesters: {
+            create: [
+              {
+                code: 'HK1',
+                name: 'Học kỳ 1',
+                startDate,
+                endDate: new Date(startDate.getTime() + 120 * 24 * 60 * 60 * 1000),
+                sortOrder: 1,
+                isActive: true,
+              },
+              {
+                code: 'HK2',
+                name: 'Học kỳ 2',
+                startDate: new Date(startDate.getTime() + 121 * 24 * 60 * 60 * 1000),
+                endDate,
+                sortOrder: 2,
+                isActive: false,
+              },
+            ],
+          },
+        },
+        include: {
+          semesters: true,
+        },
+      });
+
+      let copiedClassroomsCount = 0;
+      let copiedSubjectsCount = 0;
+
+      // 4. Selective copy of Classrooms & Subject configurations (NO historical attendance, assessments, or enrollments)
+      if (dto.copyClassrooms) {
+        const classroomWhere: any = {
+          schoolYearId: dto.sourceSchoolYearId,
+          deletedAt: null,
+        };
+        if (scopedTeacherId) {
+          classroomWhere.OR = [
+            { teacherId: scopedTeacherId },
+            { homeroomTeacherId: scopedTeacherId },
+          ];
+        }
+
+        const sourceClassrooms = await tx.classroom.findMany({
+          where: classroomWhere,
+          include: {
+            classSubjects: true,
+          },
+        });
+
+        for (const srcClass of sourceClassrooms) {
+          const newClass = await tx.classroom.create({
+            data: {
+              name: srcClass.name,
+              code: srcClass.code,
+              gradeId: srcClass.gradeId,
+              schoolYearId: newYear.id,
+              teacherId: srcClass.teacherId,
+              homeroomTeacherId: srcClass.homeroomTeacherId,
+              room: srcClass.room,
+              schedule: srcClass.schedule,
+              accent: srcClass.accent || 'teal',
+              status: 'ACTIVE',
+              isActive: true,
+            },
+          });
+          copiedClassroomsCount++;
+
+          if (dto.copyClassSubjects && srcClass.classSubjects?.length) {
+            for (const cs of srcClass.classSubjects) {
+              await tx.classSubject.create({
+                data: {
+                  classroomId: newClass.id,
+                  subjectId: cs.subjectId,
+                  isActive: cs.isActive,
+                },
+              });
+              copiedSubjectsCount++;
+            }
+          }
+        }
+      }
+
+      this.logger.log(
+        `[SCHOOL_YEAR_ROLLOVER] source="${sourceYear.name}" -> target="${newYear.name}", classrooms=${copiedClassroomsCount}, subjects=${copiedSubjectsCount}`,
+      );
+
+      return {
+        schoolYear: newYear,
+        summary: {
+          sourceYearName: sourceYear.name,
+          newYearName: newYear.name,
+          copiedClassroomsCount,
+          copiedSubjectsCount,
+          sourceClosed: !!dto.closeSourceYear,
+          isCurrent: newYear.isCurrent,
+        },
+      };
     });
   }
 

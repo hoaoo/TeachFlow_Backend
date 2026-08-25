@@ -1,6 +1,8 @@
 import {
   Controller,
   Get,
+  Post,
+  Body,
   Param,
   Query,
   Res,
@@ -16,6 +18,8 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { ExportService } from './export.service';
+import { TeacherBackupService } from './teacher-backup.service';
+import { ExportBackupDto } from './dto/export-backup.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { buildContentDisposition } from './export.utils';
@@ -25,7 +29,10 @@ import { buildContentDisposition } from './export.utils';
 @UseGuards(JwtAuthGuard)
 @Controller()
 export class ExportController {
-  constructor(private readonly exportService: ExportService) {}
+  constructor(
+    private readonly exportService: ExportService,
+    private readonly teacherBackupService: TeacherBackupService,
+  ) {}
 
   @Get('lesson-plans/:id/export/docx')
   @ApiOperation({ summary: 'Xuất giáo án ra file Microsoft Word (.docx)' })
@@ -109,5 +116,24 @@ export class ExportController {
     res.setHeader('Content-Disposition', buildContentDisposition(asciiFilename, utf8Filename));
     res.setHeader('Content-Length', buffer.length);
     return res.send(buffer);
+  }
+
+  @Post('export/backup')
+  @ApiOperation({ summary: 'Xuất toàn bộ gói sao lưu dữ liệu của giáo viên (file ZIP)' })
+  @ApiResponse({ status: 200, description: 'Tập tin ZIP sao lưu dữ liệu' })
+  async exportBackup(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ExportBackupDto,
+    @Res() res: Response,
+  ) {
+    const { stream, filename, contentType } = await this.teacherBackupService.generateBackupZip(
+      user.userId,
+      user.teacherId,
+      dto,
+    );
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    return stream.pipe(res);
   }
 }

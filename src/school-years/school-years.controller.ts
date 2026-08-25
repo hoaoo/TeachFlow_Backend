@@ -13,9 +13,11 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { SchoolYearsService } from './school-years.service';
 import { CreateSchoolYearDto } from './dto/create-school-year.dto';
 import { UpdateSchoolYearDto } from './dto/update-school-year.dto';
+import { RolloverSchoolYearDto } from './dto/rollover-school-year.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('School Years')
 @ApiBearerAuth()
@@ -49,25 +51,35 @@ export class SchoolYearsController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: '[ADMIN] Tạo năm học mới' })
+  @ApiOperation({ summary: 'Tạo năm học mới' })
   async create(@Body() dto: CreateSchoolYearDto) {
     return this.service.create(dto);
   }
 
+  @Post('rollover')
+  @ApiOperation({ summary: 'Chuyển sang năm học mới và sao chép cấu hình có chọn lọc' })
+  async rollover(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RolloverSchoolYearDto,
+  ) {
+    const scopedTeacherId = user.role === Role.ADMIN ? undefined : user.teacherId;
+    return this.service.rolloverSchoolYear(dto, scopedTeacherId);
+  }
+
+  @Patch(':id/close')
+  @ApiOperation({ summary: 'Đóng năm học (chuyển sang trạng thái đã đóng)' })
+  async close(@Param('id') id: string) {
+    return this.service.closeSchoolYear(id);
+  }
+
   @Patch(':id')
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: '[ADMIN] Cập nhật thông tin năm học' })
+  @ApiOperation({ summary: 'Cập nhật thông tin năm học' })
   async update(@Param('id') id: string, @Body() dto: UpdateSchoolYearDto) {
     return this.service.update(id, dto);
   }
 
   @Patch(':id/set-current')
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: '[ADMIN] Đặt làm năm học hiện tại' })
+  @ApiOperation({ summary: 'Đặt làm năm học hiện tại' })
   async setCurrent(@Param('id') id: string) {
     return this.service.setCurrent(id);
   }
@@ -80,3 +92,4 @@ export class SchoolYearsController {
     return this.service.remove(id);
   }
 }
+

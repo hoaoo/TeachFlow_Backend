@@ -25,14 +25,14 @@ export class NotificationsController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: NotificationQueryDto,
   ) {
-    return this.notificationsService.getUserNotifications(user.userId, query);
+    return this.notificationsService.getUserNotifications(user.userId, user.teacherId, query);
   }
 
   @Get('unread-count')
   @ApiOperation({ summary: 'Lấy số lượng thông báo chưa đọc (Polling endpoint)' })
   @ApiResponse({ status: 200, description: 'Số lượng thông báo chưa đọc' })
   async getUnreadCount(@CurrentUser() user: AuthenticatedUser) {
-    return this.notificationsService.getUnreadCount(user.userId);
+    return this.notificationsService.getUnreadCount(user.userId, user.teacherId);
   }
 
   @Patch(':id/read')
