@@ -12,14 +12,20 @@ import { TransferStudentDto } from './dto/transfer-student.dto';
 import { ImportStudentsDto, ImportStudentRowDto } from './dto/import-students.dto';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { AuditService } from '../common/audit/audit.service';
+import * as XLSX from 'xlsx';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 
 export interface StudentFilterQuery extends PaginationQueryDto {
   classId?: string;
+  classroomId?: string;
   gradeId?: string;
   schoolYearId?: string;
   status?: string;
+  supportStatus?: string;
   sort?: string;
+  search?: string;
+  keyword?: string;
+  q?: string;
 }
 
 @Injectable()
@@ -31,16 +37,15 @@ export class StudentsService {
   ) {}
 
   async findAll(query: StudentFilterQuery, teacherId?: string) {
-    const {
-      page = 1,
-      pageSize = 20,
-      keyword,
-      classId,
-      gradeId,
-      schoolYearId,
-      status,
-      sort = 'nameAsc',
-    } = query;
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.max(1, Math.min(10000, Number(query.pageSize) || 20));
+    const keyword = query.search || query.keyword || query.q;
+    const classId = query.classroomId || query.classId;
+    const gradeId = query.gradeId;
+    const schoolYearId = query.schoolYearId;
+    const status = query.status;
+    const supportStatus = query.supportStatus;
+    const sort = query.sort || 'nameAsc';
     const skip = (page - 1) * pageSize;
 
     // Anti-IDOR Scope: Teacher must have access to student's classroom
@@ -150,6 +155,15 @@ export class StudentsService {
       andConditions.push({ status: dbStatus });
     }
 
+    // Support Status filter
+    if (supportStatus && supportStatus !== 'ALL' && supportStatus !== 'Tất cả') {
+      if (supportStatus === 'NEED_SUPPORT' || supportStatus === 'Cần hỗ trợ') {
+        andConditions.push({ status: 'NEEDS_SUPPORT' });
+      } else if (supportStatus === 'NORMAL' || supportStatus === 'Bình thường') {
+        andConditions.push({ status: { not: 'NEEDS_SUPPORT' } });
+      }
+    }
+
     // Search keyword
     if (keyword && keyword.trim()) {
       const kw = keyword.trim();
@@ -169,10 +183,14 @@ export class StudentsService {
     let orderBy: any = { fullName: 'asc' };
     if (sort === 'nameDesc') {
       orderBy = { fullName: 'desc' };
-    } else if (sort === 'updatedAt') {
-      orderBy = { updatedAt: 'desc' };
     } else if (sort === 'nameAsc') {
       orderBy = { fullName: 'asc' };
+    } else if (sort === 'codeAsc') {
+      orderBy = { studentCode: 'asc' };
+    } else if (sort === 'codeDesc') {
+      orderBy = { studentCode: 'desc' };
+    } else if (sort === 'updatedAt') {
+      orderBy = { updatedAt: 'desc' };
     }
 
     const [totalItems, students, allScopeStudents] = await Promise.all([
@@ -209,6 +227,26 @@ export class StudentsService {
             },
             select: { status: true },
           },
+          studentAssessments: {
+            where: {
+              assessment: {
+                deletedAt: null,
+                ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
+              },
+            },
+            include: {
+              assessment: {
+                select: {
+                  id: true,
+                  title: true,
+                  assessmentDate: true,
+                  subject: { select: { id: true, name: true } },
+                },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
         orderBy,
       }),
@@ -230,8 +268,6 @@ export class StudentsService {
 
     // Calculate Summary Stats
     const totalStudents = allScopeStudents.length;
-    // The list scope already requires an ACTIVE StudentEnrollment, so this KPI
-    // represents currently enrolled students rather than academic performance.
     const activeStudents = totalStudents;
     const needsSupportStudents = allScopeStudents.filter((s) => s.status === 'NEEDS_SUPPORT').length;
 
@@ -254,12 +290,18 @@ export class StudentsService {
 
     let mappedItems = students.map((s) => this.mapStudentRecord(s));
 
-    // In-memory sort for attendanceLow if requested
-    if (sort === 'attendanceLow') {
+    // In-memory sort for attendance if requested
+    if (sort === 'attendanceLow' || sort === 'attendanceAsc') {
       mappedItems.sort((a, b) => {
         const attA = a.attendance ?? 100;
         const attB = b.attendance ?? 100;
         return attA - attB;
+      });
+    } else if (sort === 'attendanceHigh' || sort === 'attendanceDesc') {
+      mappedItems.sort((a, b) => {
+        const attA = a.attendance ?? 0;
+        const attB = b.attendance ?? 0;
+        return attB - attA;
       });
     }
 
@@ -1102,6 +1144,59 @@ export class StudentsService {
     }));
   }
 
+  async exportXlsx(query: StudentFilterQuery, teacherId?: string): Promise<{ buffer: Buffer; filename: string }> {
+    const list = await this.findAll({ ...query, page: 1, pageSize: 10000 }, teacherId);
+
+    const rows = list.items.map((student, idx) => ({
+      'STT': idx + 1,
+      'Mã học sinh': student.studentCode || `HS${String(idx + 1).padStart(4, '0')}`,
+      'Họ và tên': student.fullName || student.name,
+      'Giới tính': student.gender || 'Nam',
+      'Ngày sinh': student.dob || 'Chưa cập nhật',
+      'Lớp': student.className || 'Chưa phân lớp',
+      'Khối': student.gradeName || '',
+      'Năm học': student.schoolYearName || '',
+      'Trạng thái': student.status || 'Khá',
+      'Chuyên cần (%)': student.attendance !== null && student.attendance !== undefined ? `${student.attendance}%` : 'Chưa có',
+      'Đánh giá gần nhất': (student as any).latestAssessment || (student as any).latestAssessmentText || 'Chưa có',
+      'Cần hỗ trợ': (student as any).isNeedSupport || (student as any).needsSupport || student.status === 'Cần cố gắng' ? 'Có' : 'Không',
+      'Phụ huynh': student.parentName || student.guardian || 'Chưa cập nhật',
+      'Số điện thoại': student.parentPhone || student.phone || 'Chưa cập nhật',
+      'Ghi chú': student.note || '',
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(
+      rows.length > 0 ? rows : [{ 'Thông báo': 'Không có dữ liệu học sinh phù hợp' }],
+    );
+
+    const colWidths = [
+      { wch: 6 },
+      { wch: 14 },
+      { wch: 24 },
+      { wch: 10 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 14 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 28 },
+    ];
+    worksheet['!cols'] = colWidths;
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Danh sách học sinh');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `Danh_sach_hoc_sinh_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    return { buffer, filename };
+  }
+
   private mapStudentRecord(s: any) {
     const statusMap: Record<string, string> = {
       EXCELLENT: 'Tốt',
@@ -1124,6 +1219,23 @@ export class StudentsService {
       studentAttendance = Math.round((pres / s.studentAttendances.length) * 100);
     }
 
+    const latestAssessment = s.studentAssessments?.[0];
+    let latestAssessmentText = 'Chưa có';
+    if (latestAssessment) {
+      const scoreStr =
+        typeof latestAssessment.score === 'number' && !isNaN(latestAssessment.score)
+          ? `${latestAssessment.score} đ`
+          : latestAssessment.level === 'EXCELLENT'
+          ? 'Tốt'
+          : latestAssessment.level === 'COMPLETED'
+          ? 'Đạt'
+          : 'Cần cố gắng';
+      const subjName = latestAssessment.assessment?.subject?.name || latestAssessment.assessment?.title || '';
+      latestAssessmentText = subjName ? `${scoreStr} (${subjName})` : scoreStr;
+    }
+
+    const isNeedSupport = s.status === 'NEEDS_SUPPORT' || (studentAttendance !== null && studentAttendance < 80);
+
     return {
       id: s.id,
       studentCode: s.studentCode || undefined,
@@ -1139,6 +1251,10 @@ export class StudentsService {
       progress: s.status === 'EXCELLENT' ? 92 : s.status === 'GOOD' ? 84 : 70,
       status: statusMap[s.status] || 'Khá',
       attendance: studentAttendance,
+      latestAssessment: latestAssessmentText,
+      latestAssessmentText,
+      needsSupport: isNeedSupport,
+      isNeedSupport,
       note: latestComment,
       color: s.avatarColor || 'bg-teal-100 text-teal-700',
       className: activeClass?.name || 'Chưa phân lớp',

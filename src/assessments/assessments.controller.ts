@@ -17,6 +17,7 @@ import {
   BulkStudentAssessmentDto,
   BatchSaveAssessmentScoresDto,
 } from './dto/bulk-student-assessment.dto';
+import { QuickAssessmentDto } from './dto/quick-assessment.dto';
 import { GradebookQueryDto } from './dto/gradebook-query.dto';
 import { ImportGradebookScoresDto } from './dto/import-gradebook-scores.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -84,6 +85,15 @@ export class AssessmentsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.assessmentsService.findOne(id, user.teacherId);
+  }
+
+  @Post('quick')
+  @ApiOperation({ summary: 'Nhập đánh giá nhanh cho 1 hoặc nhiều học sinh' })
+  async createQuick(
+    @Body() dto: QuickAssessmentDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.assessmentsService.createQuickAssessment(dto, user.teacherId);
   }
 
   @Post()

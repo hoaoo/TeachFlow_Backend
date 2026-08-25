@@ -19,6 +19,7 @@ import {
 } from './dto/bulk-student-assessment.dto';
 import { GradebookQueryDto } from './dto/gradebook-query.dto';
 import { ImportGradebookScoresDto } from './dto/import-gradebook-scores.dto';
+import { QuickAssessmentDto } from './dto/quick-assessment.dto';
 import { AuditService } from '../common/audit/audit.service';
 
 @Injectable()
@@ -288,6 +289,133 @@ export class AssessmentsService {
     });
 
     return this.mapAssessment(assessment);
+  }
+
+  async createQuickAssessment(dto: QuickAssessmentDto, teacherId: string) {
+    const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
+    if (!accessibleClassIds.includes(dto.classroomId)) {
+      throw new ForbiddenException('Bạn không có quyền đánh giá học sinh trong lớp học này');
+    }
+
+    const classroom = await this.prisma.classroom.findUnique({
+      where: { id: dto.classroomId },
+      include: { schoolYear: true },
+    });
+    if (!classroom || classroom.deletedAt) {
+      throw new NotFoundException('Không tìm thấy lớp học');
+    }
+
+    // Find or create assessment record for this title and class
+    let assessment = await this.prisma.assessment.findFirst({
+      where: {
+        teacherId,
+        classroomId: dto.classroomId,
+        title: dto.title.trim(),
+        subjectId: dto.subjectId || undefined,
+        deletedAt: null,
+      },
+    });
+
+    if (!assessment) {
+      assessment = await this.prisma.assessment.create({
+        data: {
+          teacherId,
+          classroomId: dto.classroomId,
+          subjectId: dto.subjectId || null,
+          schoolYearId: classroom.schoolYearId,
+          title: dto.title.trim(),
+          semester: dto.semester || 1,
+          assessmentDate: dto.assessmentDate ? new Date(dto.assessmentDate) : new Date(),
+          status: 'COMPLETED',
+        },
+      });
+    }
+
+    const effectiveLevel =
+      dto.level ||
+      (dto.score !== undefined
+        ? dto.score >= 9
+          ? AssessmentLevelEnum.EXCELLENT
+          : dto.score >= 5
+          ? AssessmentLevelEnum.COMPLETED
+          : AssessmentLevelEnum.NEEDS_SUPPORT
+        : AssessmentLevelEnum.COMPLETED);
+
+    // Record for each student
+    for (const studentId of dto.studentIds) {
+      const isEnrolled = await this.prisma.studentEnrollment.findFirst({
+        where: { studentId, classroomId: dto.classroomId, status: 'ACTIVE' },
+      });
+      if (!isEnrolled) {
+        continue;
+      }
+
+      const existingRecord = await this.prisma.studentAssessment.findFirst({
+        where: { assessmentId: assessment.id, studentId },
+      });
+
+      if (existingRecord) {
+        await this.prisma.studentAssessment.update({
+          where: { id: existingRecord.id },
+          data: {
+            level: effectiveLevel,
+            score: dto.score !== undefined ? dto.score : existingRecord.score,
+            comment: dto.comment !== undefined ? dto.comment : existingRecord.comment,
+          },
+        });
+      } else {
+        await this.prisma.studentAssessment.create({
+          data: {
+            assessmentId: assessment.id,
+            studentId,
+            level: effectiveLevel,
+            score: dto.score,
+            comment: dto.comment,
+          },
+        });
+      }
+
+      if (dto.comment && dto.comment.trim()) {
+        await this.prisma.studentComment.create({
+          data: {
+            studentId,
+            teacherId,
+            classroomId: dto.classroomId,
+            subjectId: dto.subjectId || null,
+            content: `[${dto.title}] ${dto.comment.trim()}`,
+          },
+        });
+      }
+
+      // If marked as NEEDS_SUPPORT, update student status
+      if (effectiveLevel === AssessmentLevelEnum.NEEDS_SUPPORT) {
+        await this.prisma.student.update({
+          where: { id: studentId },
+          data: { status: 'NEEDS_SUPPORT' },
+        });
+      } else if (effectiveLevel === AssessmentLevelEnum.EXCELLENT) {
+        await this.prisma.student.update({
+          where: { id: studentId },
+          data: { status: 'EXCELLENT' },
+        });
+      }
+    }
+
+    this.auditService?.log({
+      actorUserId: teacherId,
+      action: 'QUICK_ASSESSMENT_CREATE',
+      resourceType: 'Assessment',
+      resourceId: assessment.id,
+      details: { title: assessment.title, studentCount: dto.studentIds.length, classroomId: dto.classroomId },
+    });
+
+    return {
+      success: true,
+      assessmentId: assessment.id,
+      assessmentTitle: assessment.title,
+      updatedStudentsCount: dto.studentIds.length,
+      message: `Đã lưu đánh giá cho ${dto.studentIds.length} học sinh thành công`,
+    };
   }
 
   async update(id: string, dto: UpdateAssessmentDto, teacherId: string) {
