@@ -11,6 +11,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { WorksheetsService } from './worksheets.service';
 import { CreateWorksheetDto } from './dto/create-worksheet.dto';
 import { UpdateWorksheetDto } from './dto/update-worksheet.dto';
+import { AssignWorksheetDto } from './dto/assign-worksheet.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Worksheets')
@@ -34,6 +35,33 @@ export class WorksheetsController {
     return this.worksheetsService.previewDraft(dto, user.teacherName);
   }
 
+  @Get('classrooms/:classroomId/assignments')
+  @ApiOperation({ summary: 'Danh sách phiếu đã giao cho lớp' })
+  async getClassroomAssignments(
+    @Param('classroomId') classroomId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.worksheetsService.getClassroomAssignments(classroomId, user.teacherId);
+  }
+
+  @Post(':id/assign')
+  @ApiOperation({ summary: 'Giao phiếu học tập cho lớp' })
+  async assign(
+    @Param('id') id: string,
+    @Body() dto: AssignWorksheetDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.worksheetsService.assign(id, dto, user.teacherId);
+  }
+
+  @Get(':id/assignments')
+  @ApiOperation({ summary: 'Danh sách lớp đã được giao phiếu' })
+  async getAssignments(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.worksheetsService.getAssignments(id, user.teacherId);
+  }
   @Get(':id/preview')
   @ApiOperation({ summary: 'Xem trước phiếu học tập đã lưu (JSON render model)' })
   async previewById(

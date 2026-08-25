@@ -410,6 +410,7 @@ export class ClassroomsService {
 
     const existing = await this.prisma.classroom.findFirst({
       where: {
+        teacherId: targetTeacherId,
         schoolYearId,
         code,
         deletedAt: null,
@@ -565,6 +566,7 @@ export class ClassroomsService {
     if ((dto.code && dto.code.trim().toUpperCase() !== existing.code) || (dto.schoolYearId && dto.schoolYearId !== existing.schoolYearId)) {
       const duplicate = await this.prisma.classroom.findFirst({
         where: {
+          teacherId: existing.teacherId,
           schoolYearId,
           code,
           deletedAt: null,
@@ -716,6 +718,7 @@ export class ClassroomsService {
 
     const existing = await this.prisma.classroom.findFirst({
       where: {
+        teacherId: sourceClass.teacherId,
         schoolYearId: dto.targetSchoolYearId,
         code: targetCode,
         deletedAt: null,
@@ -944,9 +947,21 @@ export class ClassroomsService {
       include: {
         student: {
           include: {
-            studentAttendances: { take: 10, orderBy: { createdAt: 'desc' } },
-            studentAssessments: { take: 5, orderBy: { createdAt: 'desc' } },
-            comments: { where: { classroomId: classId }, take: 3, orderBy: { commentDate: 'desc' } },
+            studentAttendances: {
+              where: { attendanceSession: { classroomId: classId, ...(teacherId ? { teacherId } : {}) } },
+              take: 10,
+              orderBy: { createdAt: 'desc' },
+            },
+            studentAssessments: {
+              where: { assessment: { classroomId: classId, ...(teacherId ? { teacherId } : {}) } },
+              take: 5,
+              orderBy: { createdAt: 'desc' },
+            },
+            comments: {
+              where: { classroomId: classId, ...(teacherId ? { teacherId } : {}) },
+              take: 3,
+              orderBy: { commentDate: 'desc' },
+            },
           },
         },
       },
@@ -1326,7 +1341,7 @@ export class ClassroomsService {
     await this.assertTeacherAccess(classId, teacherId);
 
     const schedules = await this.prisma.schedule.findMany({
-      where: { classroomId: classId, deletedAt: null },
+      where: { classroomId: classId, deletedAt: null, ...(teacherId ? { teacherId } : {}) },
       orderBy: { plannedDate: 'desc' },
       include: {
         subject: true,
@@ -1337,7 +1352,7 @@ export class ClassroomsService {
 
     const scheduleIds = schedules.map((s) => s.id);
     const sessions = await this.prisma.attendanceSession.findMany({
-      where: { scheduleId: { in: scheduleIds } },
+      where: { scheduleId: { in: scheduleIds }, ...(teacherId ? { teacherId } : {}) },
       select: { scheduleId: true, id: true },
     });
     const recordedMap = new Set(sessions.map((s) => s.scheduleId));
@@ -1380,6 +1395,7 @@ export class ClassroomsService {
       where: {
         classroomId: classId,
         attendanceDate: dateFilter,
+        ...(teacherId ? { teacherId } : {}),
       },
       orderBy: { attendanceDate: 'desc' },
       include: {
@@ -1459,7 +1475,7 @@ export class ClassroomsService {
     await this.assertTeacherAccess(classId, teacherId);
 
     const assessments = await this.prisma.assessment.findMany({
-      where: { classroomId: classId },
+      where: { classroomId: classId, ...(teacherId ? { teacherId } : {}) },
       orderBy: { createdAt: 'desc' },
       include: {
         subject: true,
@@ -1524,6 +1540,7 @@ export class ClassroomsService {
       where: {
         classroomId: classId,
         deletedAt: null,
+        ...(teacherId ? { teacherId } : {}),
       },
       orderBy: { updatedAt: 'desc' },
       include: {

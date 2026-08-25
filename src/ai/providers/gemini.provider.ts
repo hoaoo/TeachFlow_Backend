@@ -90,7 +90,34 @@ export class GeminiProvider implements AiProvider {
   }
 
   getImageModelName(): string {
-    return this.getEnvString('GEMINI_IMAGE_MODEL') || 'imagen-4.0-generate-001';
+    return this.getEnvString('GEMINI_IMAGE_MODEL') || 'gemini-2.5-flash-image';
+  }
+
+  getImageFallbackModelName(): string {
+    return this.getEnvString('GEMINI_IMAGE_FALLBACK_MODEL') || 'gemini-2.5-flash-image';
+  }
+
+  private isImagenModel(model: string): boolean {
+    return model.toLowerCase().startsWith('imagen-');
+  }
+
+  private logImageEvent(params: {
+    model: string;
+    stage: string;
+    statusCode: number;
+    errorCode: string;
+    durationMs: number;
+  }) {
+    const line =
+      `[AI] feature=image-generate provider=gemini model=${params.model} stage=${params.stage} ` +
+      `statusCode=${params.statusCode} errorCode=${params.errorCode} durationMs=${params.durationMs}`;
+    if (params.statusCode >= 500) {
+      this.logger.error(line);
+    } else if (params.statusCode >= 400) {
+      this.logger.warn(line);
+    } else {
+      this.logger.log(line);
+    }
   }
 
   getMaxInputChars(): number {
@@ -116,7 +143,15 @@ export class GeminiProvider implements AiProvider {
     if (status === 429 || msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted')) {
       return 'QUOTA_EXCEEDED';
     }
-    if (status === 404 || msg.includes('not found') || msg.includes('not supported')) {
+    if (
+      status === 404 ||
+      msg.includes('not found') ||
+      msg.includes('not supported') ||
+      msg.includes('deprecated') ||
+      msg.includes('shut down') ||
+      msg.includes('shutdown') ||
+      msg.includes('retired')
+    ) {
       return 'MODEL_NOT_FOUND';
     }
     if (
@@ -346,19 +381,64 @@ export class GeminiProvider implements AiProvider {
 
   async generateImage(options: GenerateImageOptions): Promise<GeneratedImage> {
     const { operation, prompt } = options;
-    this.assertClientReady(operation);
+    const startTime = Date.now();
+    let model = this.getImageModelName();
+    let stage = 'config';
+
+    if (!this.aiClient || !this.getApiKey()) {
+      this.logImageEvent({
+        model: 'none',
+        stage,
+        statusCode: 503,
+        errorCode: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
+        durationMs: Date.now() - startTime,
+      });
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
+        message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
+      });
+    }
+
     this.assertPromptSize(prompt);
 
-    const imageModel = this.getImageModelName();
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation('image');
-    const startTime = Date.now();
     const aspectRatio = options.aspectRatio || '1:1';
+    const imagePrompt =
+      aspectRatio && aspectRatio !== '1:1'
+        ? `${prompt}\nTỷ lệ khung hình: ${aspectRatio}.`
+        : prompt;
 
-    try {
+    const decodeImageBytes = (raw: unknown, mimeType?: string): GeneratedImage => {
+      stage = 'decode';
+      if (raw === undefined || raw === null || raw === '') {
+        throw new Error('Gemini returned an empty response');
+      }
+      let buffer: Buffer;
+      if (Buffer.isBuffer(raw)) {
+        buffer = raw;
+      } else if (raw instanceof Uint8Array) {
+        buffer = Buffer.from(raw);
+      } else {
+        buffer = Buffer.from(String(raw), 'base64');
+      }
+      if (!buffer.length) {
+        throw new Error('Gemini returned an empty response');
+      }
+      return { buffer, mimeType: mimeType || 'image/png' };
+    };
+
+    const generateViaImagen = async (imageModel: string): Promise<GeneratedImage> => {
+      stage = 'provider_api';
+      if (typeof this.aiClient!.models.generateImages !== 'function') {
+        const err: any = new Error('Image generation method is not supported');
+        err.status = 404;
+        throw err;
+      }
       const response = await this.withTimeout(operation, timeoutMs, () =>
         this.aiClient!.models.generateImages({
           model: imageModel,
-          prompt,
+          prompt: imagePrompt,
           config: {
             numberOfImages: 1,
             aspectRatio,
@@ -366,70 +446,157 @@ export class GeminiProvider implements AiProvider {
           },
         }),
       );
-
       const imageBytes = response?.generatedImages?.[0]?.image?.imageBytes;
-      if (!imageBytes) {
-        throw new Error('Gemini returned an empty response');
-      }
+      return decodeImageBytes(imageBytes, 'image/png');
+    };
 
-      this.logger.log(
-        `[AI] operation=${operation} model=${imageModel} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
+    const generateViaContent = async (imageModel: string): Promise<GeneratedImage> => {
+      stage = 'provider_api';
+      const response = await this.withTimeout(operation, timeoutMs, () =>
+        this.aiClient!.models.generateContent({
+          model: imageModel,
+          contents: imagePrompt,
+          config: {
+            responseModalities: ['TEXT', 'IMAGE'],
+          },
+        }),
       );
+      const parts = (response as any)?.candidates?.[0]?.content?.parts || [];
+      const inline = parts.find((part: any) => part?.inlineData?.data || part?.inline_data?.data);
+      const data = inline?.inlineData?.data || inline?.inline_data?.data;
+      const mimeType = inline?.inlineData?.mimeType || inline?.inline_data?.mime_type || 'image/png';
+      return decodeImageBytes(data, mimeType);
+    };
 
-      return {
-        buffer: Buffer.from(imageBytes, 'base64'),
-        mimeType: 'image/png',
-      };
-    } catch (error: any) {
-      const errorCategory = this.categorizeError(error);
-      this.logger.error(
-        `[AI] operation=${operation} model=${imageModel} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory}`,
-      );
-
-      if (errorCategory === 'TIMEOUT' || error instanceof RequestTimeoutException) {
+    const mapAndThrow = (error: any, usedModel: string): never => {
+      model = usedModel;
+      if (error instanceof BadRequestException && this.categorizeError(error) === 'INVALID_INPUT') {
+        this.logImageEvent({
+          model,
+          stage,
+          statusCode: 400,
+          errorCode: 'AI_IMAGE_INVALID_REQUEST',
+          durationMs: Date.now() - startTime,
+        });
         throw error;
       }
-      if (errorCategory === 'AUTH_ERROR' || errorCategory === 'QUOTA_EXCEEDED') {
-        throw new InternalServerErrorException('Không thể tạo ảnh lúc này. Vui lòng thử lại.');
+
+      const category = this.categorizeError(error);
+      const upstreamStatus = Number(error?.status || error?.statusCode) || 0;
+
+      if (category === 'TIMEOUT' || error instanceof RequestTimeoutException) {
+        this.logImageEvent({
+          model,
+          stage: 'provider_api',
+          statusCode: 408,
+          errorCode: 'AI_IMAGE_TIMEOUT',
+          durationMs: Date.now() - startTime,
+        });
+        throw new RequestTimeoutException({
+          statusCode: 408,
+          code: 'AI_IMAGE_TIMEOUT',
+          message: `Yêu cầu AI (image) vượt quá thời gian cho phép (${Math.round(timeoutMs / 1000)} giây)`,
+        });
       }
 
-      // Fallback: some API keys expose image generation through generateContent.
-      try {
-        const fallbackModel = this.getEnvString('GEMINI_IMAGE_FALLBACK_MODEL') || this.getModelName();
-        const response = await this.withTimeout(operation, timeoutMs, () =>
-          this.aiClient!.models.generateContent({
+      if (
+        category === 'MODEL_NOT_FOUND' ||
+        category === 'AUTH_ERROR' ||
+        category === 'QUOTA_EXCEEDED' ||
+        category === 'SERVICE_UNAVAILABLE' ||
+        category === 'PARSE_ERROR'
+      ) {
+        this.logImageEvent({
+          model,
+          stage,
+          statusCode: 503,
+          errorCode: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
+          durationMs: Date.now() - startTime,
+        });
+        throw new ServiceUnavailableException({
+          statusCode: 503,
+          code: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
+          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
+        });
+      }
+
+      if (category === 'INVALID_INPUT' || (upstreamStatus >= 400 && upstreamStatus < 500)) {
+        this.logImageEvent({
+          model,
+          stage: 'provider_api',
+          statusCode: 400,
+          errorCode: 'AI_IMAGE_INVALID_REQUEST',
+          durationMs: Date.now() - startTime,
+        });
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'AI_IMAGE_INVALID_REQUEST',
+          message: 'Yêu cầu tạo ảnh không hợp lệ. Vui lòng điều chỉnh mô tả và thử lại.',
+        });
+      }
+
+      this.logImageEvent({
+        model,
+        stage: 'provider_api',
+        statusCode: 503,
+        errorCode: 'AI_IMAGE_UPSTREAM_ERROR',
+        durationMs: Date.now() - startTime,
+      });
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: 'AI_IMAGE_UPSTREAM_ERROR',
+        message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
+      });
+    };
+
+    const runPrimary = () =>
+      this.isImagenModel(model) ? generateViaImagen(model) : generateViaContent(model);
+
+    try {
+      const result = await runPrimary();
+      this.logImageEvent({
+        model,
+        stage: 'provider_api',
+        statusCode: 200,
+        errorCode: 'SUCCESS',
+        durationMs: Date.now() - startTime,
+      });
+      return result;
+    } catch (error: any) {
+      if (error instanceof RequestTimeoutException || this.categorizeError(error) === 'TIMEOUT') {
+        return mapAndThrow(error, model);
+      }
+
+      const category = this.categorizeError(error);
+      const fallbackModel = this.getImageFallbackModelName();
+      const shouldFallback =
+        fallbackModel &&
+        fallbackModel !== model &&
+        (this.isImagenModel(model) ||
+          category === 'MODEL_NOT_FOUND' ||
+          category === 'PARSE_ERROR');
+
+      if (shouldFallback) {
+        this.logger.warn(
+          `[AI] feature=image-generate provider=gemini model=${model} stage=provider_api statusCode=0 errorCode=FALLBACK durationMs=${Date.now() - startTime}`,
+        );
+        try {
+          model = fallbackModel;
+          const result = await generateViaContent(fallbackModel);
+          this.logImageEvent({
             model: fallbackModel,
-            contents: prompt,
-            config: {
-              responseModalities: ['TEXT', 'IMAGE'] as any,
-            },
-          }),
-        );
-
-        const parts = (response as any)?.candidates?.[0]?.content?.parts || [];
-        const inline = parts.find((part: any) => part?.inlineData?.data);
-        if (!inline?.inlineData?.data) {
-          throw new Error('Gemini returned an empty response');
+            stage: 'provider_api',
+            statusCode: 200,
+            errorCode: 'SUCCESS',
+            durationMs: Date.now() - startTime,
+          });
+          return result;
+        } catch (fallbackError: any) {
+          return mapAndThrow(fallbackError, fallbackModel);
         }
-
-        this.logger.log(
-          `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
-        );
-
-        return {
-          buffer: Buffer.from(inline.inlineData.data, 'base64'),
-          mimeType: inline.inlineData.mimeType || 'image/png',
-        };
-      } catch (fallbackError: any) {
-        const fallbackCategory = this.categorizeError(fallbackError);
-        this.logger.error(
-          `[AI] operation=${operation} model=image-fallback elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${fallbackCategory}`,
-        );
-        if (fallbackError instanceof RequestTimeoutException) {
-          throw fallbackError;
-        }
-        throw new InternalServerErrorException('Không thể tạo ảnh lúc này. Vui lòng thử lại.');
       }
+
+      return mapAndThrow(error, model);
     }
   }
 }

@@ -217,7 +217,7 @@ export class HomeroomService {
 
     // Recent behavior records (top 5)
     const recentBehavior = await this.prisma.studentBehaviorRecord.findMany({
-      where: { classroomId },
+      where: { classroomId, teacherId },
       include: {
         student: { select: { id: true, fullName: true, avatarColor: true, initials: true } },
       },
@@ -323,11 +323,13 @@ export class HomeroomService {
             behaviorRecords: {
               where: {
                 classroomId,
+                teacherId,
                 recordDate: { gte: windowStart },
               },
             },
             studentAssessments: {
               where: {
+                assessment: { teacherId },
                 createdAt: { gte: windowStart },
               },
               include: {
@@ -778,6 +780,7 @@ export class HomeroomService {
     const sessions = await this.prisma.attendanceSession.findMany({
       where: {
         classroomId,
+        teacherId,
         attendanceDate: { gte: weekStart, lte: weekEnd },
       },
       include: { attendances: true },
@@ -808,6 +811,7 @@ export class HomeroomService {
     const behaviors = await this.prisma.studentBehaviorRecord.findMany({
       where: {
         classroomId,
+        teacherId,
         recordDate: { gte: weekStart, lte: weekEnd },
       },
     });
@@ -822,6 +826,7 @@ export class HomeroomService {
     const assessments = await this.prisma.assessment.findMany({
       where: {
         classroomId,
+        teacherId,
         createdAt: { gte: weekStart, lte: weekEnd },
       },
       include: { studentAssessments: true },
@@ -998,6 +1003,7 @@ export class HomeroomService {
     const sessions = await this.prisma.attendanceSession.findMany({
       where: {
         classroomId,
+        teacherId,
         attendanceDate: { gte: monthStart, lte: monthEnd },
       },
       include: { attendances: true },
@@ -1028,6 +1034,7 @@ export class HomeroomService {
     const behaviors = await this.prisma.studentBehaviorRecord.findMany({
       where: {
         classroomId,
+        teacherId,
         recordDate: { gte: monthStart, lte: monthEnd },
       },
     });
@@ -1042,6 +1049,7 @@ export class HomeroomService {
     const assessments = await this.prisma.assessment.findMany({
       where: {
         classroomId,
+        teacherId,
         createdAt: { gte: monthStart, lte: monthEnd },
       },
       include: { studentAssessments: true },

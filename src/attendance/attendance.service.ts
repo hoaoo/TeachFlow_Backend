@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -465,7 +466,7 @@ export class AttendanceService {
           { leftAt: null },
           { leftAt: { gte: targetDate } },
         ],
-        status: { in: ['ACTIVE', 'TRANSFERRED', 'COMPLETED'] },
+        status: 'ACTIVE',
         student: { deletedAt: null },
       },
       include: { student: true },
@@ -477,6 +478,7 @@ export class AttendanceService {
         classroomId: classId,
         attendanceDate: targetDate,
         scheduleId: null,
+        ...(teacherId ? { teacherId } : {}),
       },
       include: {
         attendances: true,
@@ -557,6 +559,7 @@ export class AttendanceService {
           classroomId: dto.classId,
           attendanceDate: targetDate,
           scheduleId: null,
+          sessionPeriod: dto.sessionPeriod || 'MORNING',
         },
       });
 
@@ -619,17 +622,19 @@ export class AttendanceService {
         message: 'Lưu điểm danh thành công',
         sessionId: session.id,
       };
+    }).catch((error: any) => {
+      if (error?.code === 'P2002') {
+        throw new ConflictException('Buổi điểm danh đã tồn tại; vui lòng tải lại và cập nhật buổi hiện có');
+      }
+      throw error;
     });
   }
 
   async getHistory(teacherId?: string) {
     const where: any = {};
     if (teacherId) {
-      where.OR = [
-        { teacherId },
-        { classroom: { teacherId } },
-        { teachingAssignment: { teacherId } },
-      ];
+      // Attendance records are teacher-owned; classroom/assignment access must not broaden this history.
+      where.teacherId = teacherId;
     }
 
     const sessions = await this.prisma.attendanceSession.findMany({

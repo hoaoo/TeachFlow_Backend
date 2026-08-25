@@ -200,6 +200,31 @@ describe('StudentsService (Production Unit Tests)', () => {
       expect(res.summary.avgAttendanceRate).toBe(100);
     });
 
+    it('maps nameAsc/nameDesc to fullName and keeps invalid sort safe', async () => {
+      mockPrisma.classroom.findMany.mockResolvedValue([mockClass1G]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValue([]);
+      mockPrisma.student.count.mockResolvedValue(1);
+      mockPrisma.student.findMany.mockResolvedValue([mockStudent1]);
+
+      await service.findAll({ sort: 'nameAsc' }, 'teacher-a');
+      expect(mockPrisma.student.findMany.mock.calls.find((call: any[]) => call[0]?.orderBy)?.[0]).toEqual(
+        expect.objectContaining({ orderBy: { fullName: 'asc' } }),
+      );
+
+      mockPrisma.student.findMany.mockClear();
+      await service.findAll({ sort: 'nameDesc' }, 'teacher-a');
+      expect(mockPrisma.student.findMany.mock.calls.find((call: any[]) => call[0]?.orderBy)?.[0]).toEqual(
+        expect.objectContaining({ orderBy: { fullName: 'desc' } }),
+      );
+
+      mockPrisma.student.findMany.mockClear();
+      await expect(service.findAll({ sort: 'invalid-sort' }, 'teacher-a')).resolves.toEqual(
+        expect.objectContaining({ items: expect.any(Array) }),
+      );
+      expect(mockPrisma.student.findMany.mock.calls.find((call: any[]) => call[0]?.orderBy)?.[0]).toEqual(
+        expect.objectContaining({ orderBy: { fullName: 'asc' } }),
+      );
+    });
     it('returns avgAttendanceRate = null if no attendance records exist for teacher students', async () => {
       mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClass1G]);
       mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);

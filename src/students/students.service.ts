@@ -279,38 +279,38 @@ export class StudentsService {
       throw new NotFoundException(`Không tìm thấy học sinh với mã ${id}`);
     }
 
-    // Anti-IDOR: Check teacher permission
+    // Anti-IDOR: a teacher may only see active enrollments in classrooms
+    // returned by the current authorization scope. Related records are filtered
+    // in memory as a final defense because legacy data may contain ClassStudent
+    // rows outside the canonical enrollment table.
     if (teacherId) {
-      const isHomeroom = [
-        ...(student.classStudents || []).map((cs: any) => cs.classroom),
-        ...(student.studentEnrollments || []).map((se: any) => se.classroom),
-      ].some((c: any) => c && (c.teacherId === teacherId || c.teacher?.userId === teacherId));
-
-      let hasAccess = isHomeroom;
-      if (!hasAccess) {
-        const teacherClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
-        const studentClassIds = [
-          ...(student.classStudents || []).map((cs: any) => cs.classroomId),
-          ...(student.studentEnrollments || []).map((se: any) => se.classroomId),
-        ].filter(Boolean);
-
-        hasAccess = studentClassIds.some((cid) => teacherClassIds.includes(cid));
-
-        if (!hasAccess && studentClassIds.length > 0 && this.prisma.teachingAssignment?.count) {
-          const assignedCount = await this.prisma.teachingAssignment.count({
-            where: {
-              teacherId,
-              classroomId: { in: studentClassIds },
-              isActive: true,
-            },
-          });
-          hasAccess = assignedCount > 0;
-        }
-      }
+      const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
+      const hasAccess = (student.studentEnrollments || []).some(
+        (enrollment: any) =>
+          enrollment.status === 'ACTIVE' && accessibleClassIds.includes(enrollment.classroomId),
+      );
 
       if (!hasAccess) {
         throw new ForbiddenException('Bạn không có quyền truy cập thông tin học sinh này');
       }
+
+      student.classStudents = (student.classStudents || []).filter((item: any) =>
+        accessibleClassIds.includes(item.classroomId),
+      );
+      student.studentEnrollments = (student.studentEnrollments || []).filter((item: any) =>
+        accessibleClassIds.includes(item.classroomId),
+      );
+      student.comments = (student.comments || []).filter(
+        (item: any) => item.teacherId === teacherId && accessibleClassIds.includes(item.classroomId),
+      );
+      student.studentAttendances = (student.studentAttendances || []).filter(
+        (item: any) =>
+          item.attendanceSession?.teacherId === teacherId &&
+          accessibleClassIds.includes(item.attendanceSession?.classroomId),
+      );
+      student.studentAssessments = (student.studentAssessments || []).filter(
+        (item: any) => item.assessment?.teacherId === teacherId,
+      );
     }
 
     return this.mapStudentRecord(student);
@@ -760,9 +760,10 @@ export class StudentsService {
 
   async getOverview(id: string, teacherId: string) {
     const student = await this.findOne(id, teacherId);
+    const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
 
     const attendances = await this.prisma.studentAttendance.findMany({
-      where: { studentId: id },
+      where: { studentId: id, attendanceSession: { teacherId, classroomId: { in: accessibleClassIds } } },
     });
 
     const totalSessions = attendances.length;
@@ -772,7 +773,7 @@ export class StudentsService {
     const attendanceRate = totalSessions > 0 ? Math.round((present / totalSessions) * 100) : null;
 
     const assessments = await this.prisma.studentAssessment.findMany({
-      where: { studentId: id },
+      where: { studentId: id, assessment: { teacherId } },
       include: { assessment: { include: { subject: true } } },
     });
 
@@ -782,7 +783,7 @@ export class StudentsService {
         ? parseFloat((validScores.reduce((acc: number, a: any) => acc + (a.score || 0), 0) / validScores.length).toFixed(1))
         : null;
 
-    const commentsCount = await this.prisma.studentComment.count({ where: { studentId: id } });
+    const commentsCount = await this.prisma.studentComment.count({ where: { studentId: id, teacherId } });
 
     return {
       student,
@@ -800,9 +801,10 @@ export class StudentsService {
 
   async getAttendance(id: string, teacherId: string) {
     await this.findOne(id, teacherId);
+    const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
 
     const attendances = await this.prisma.studentAttendance.findMany({
-      where: { studentId: id },
+      where: { studentId: id, attendanceSession: { teacherId, classroomId: { in: accessibleClassIds } } },
       include: {
         attendanceSession: {
           include: {
@@ -858,7 +860,7 @@ export class StudentsService {
     await this.findOne(id, teacherId);
 
     const assessments = await this.prisma.studentAssessment.findMany({
-      where: { studentId: id },
+      where: { studentId: id, assessment: { teacherId } },
       include: {
         assessment: { include: { subject: true, classroom: true } },
         criterion: true,
@@ -897,7 +899,7 @@ export class StudentsService {
     await this.findOne(id, teacherId);
 
     const comments = await this.prisma.studentComment.findMany({
-      where: { studentId: id },
+      where: { studentId: id, teacherId },
       include: { teacher: true, classroom: true },
       orderBy: { commentDate: 'desc' },
     });
@@ -915,6 +917,16 @@ export class StudentsService {
     const student = await this.findOne(id, teacherId);
 
     const targetClassId = classroomId || student.classId;
+    const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
+    if (!targetClassId || !accessibleClassIds.includes(targetClassId)) {
+      throw new ForbiddenException('Bạn không có quyền ghi nhận xét cho lớp học này');
+    }
+    const enrollment = await this.prisma.studentEnrollment.findFirst({
+      where: { studentId: id, classroomId: targetClassId, status: 'ACTIVE' },
+    });
+    if (!enrollment) {
+      throw new ForbiddenException('Học sinh không thuộc lớp học đang được chọn');
+    }
 
     return this.prisma.studentComment.create({
       data: {
@@ -928,9 +940,10 @@ export class StudentsService {
 
   async getEnrollments(id: string, teacherId?: string) {
     await this.findOne(id, teacherId);
+    const accessibleClassIds = teacherId ? await this.classroomAccess.getAccessibleClassroomIds(teacherId) : undefined;
 
     const enrollments = await this.prisma.studentEnrollment.findMany({
-      where: { studentId: id },
+      where: { studentId: id, ...(accessibleClassIds ? { classroomId: { in: accessibleClassIds } } : {}) },
       include: {
         schoolYear: true,
         classroom: { include: { grade: true } },

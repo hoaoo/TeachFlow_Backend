@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
 import { ImageAiService } from './image-ai.service';
 import { GeminiProvider } from './providers/gemini.provider';
 import { ResourcesService } from '../resources/resources.service';
@@ -9,6 +9,7 @@ describe('ImageAiService', () => {
   let service: ImageAiService;
   const mockProvider = {
     generateImage: jest.fn(),
+    getImageModelName: jest.fn().mockReturnValue('gemini-2.5-flash-image'),
   };
   const mockResources = {
     saveGeneratedFile: jest.fn(),
@@ -78,5 +79,29 @@ describe('ImageAiService', () => {
         { userId: 'u', email: 'a@test.com', role: 'TEACHER', teacherId: 'teacher-A' },
       ),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('maps storage failure to AI_IMAGE_STORAGE_FAILED without leaking internals', async () => {
+    mockProvider.generateImage.mockResolvedValue({ buffer: Buffer.from('png'), mimeType: 'image/png' });
+    mockProvider.getImageModelName = jest.fn().mockReturnValue('gemini-2.5-flash-image');
+    mockResources.saveGeneratedFile.mockRejectedValue(new Error('EACCES /uploads/resources/secret-path'));
+
+    const error: any = await service
+      .generate(
+        { prompt: 'minh họa phân số' } as any,
+        { userId: 'u', email: 'a@test.com', role: 'TEACHER', teacherId: 't1' },
+      )
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(InternalServerErrorException);
+    expect(error.getResponse()).toEqual(
+      expect.objectContaining({
+        statusCode: 500,
+        code: 'AI_IMAGE_STORAGE_FAILED',
+        message: 'Không thể lưu ảnh đã tạo. Vui lòng thử lại.',
+      }),
+    );
+    expect(JSON.stringify(error.getResponse())).not.toContain('EACCES');
+    expect(JSON.stringify(error.getResponse())).not.toContain('secret-path');
   });
 });

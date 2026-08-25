@@ -180,19 +180,117 @@ describe('GeminiProvider', () => {
     ).rejects.toThrow('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
   });
 
-  it('generates an image buffer from base64 bytes', async () => {
-    mockGenerateImages.mockResolvedValueOnce({
-      generatedImages: [{ image: { imageBytes: Buffer.from('png-data').toString('base64') } }],
+  describe('generateImage', () => {
+    it('generates an image buffer from generateContent inline data (valid path)', async () => {
+      mockGenerateContent.mockResolvedValueOnce({
+        candidates: [
+          {
+            content: {
+              parts: [{ inlineData: { data: Buffer.from('png-data').toString('base64'), mimeType: 'image/png' } }],
+            },
+          },
+        ],
+      });
+
+      const image = await provider.generateImage({
+        operation: 'image',
+        prompt: 'minh họa phân số',
+        aspectRatio: '1:1',
+      });
+
+      expect(image.mimeType).toBe('image/png');
+      expect(Buffer.isBuffer(image.buffer)).toBe(true);
+      expect(image.buffer.toString()).toBe('png-data');
+      expect(mockGenerateContent).toHaveBeenCalled();
+      expect(JSON.stringify(mockGenerateContent.mock.calls[0][0])).not.toContain('test_api_key');
     });
 
-    const image = await provider.generateImage({
-      operation: 'image',
-      prompt: 'minh họa phân số',
-      aspectRatio: '1:1',
+    it('returns 503 AI_IMAGE_PROVIDER_UNAVAILABLE when API key is missing', async () => {
+      (provider as any).aiClient = null;
+      jest.spyOn(provider as any, 'getApiKey').mockReturnValue(null);
+
+      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect(error.getResponse()).toEqual(
+        expect.objectContaining({
+          statusCode: 503,
+          code: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
+          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
+        }),
+      );
+      expect(JSON.stringify(error.getResponse())).not.toContain('GEMINI_API_KEY');
     });
 
-    expect(image.mimeType).toBe('image/png');
-    expect(Buffer.isBuffer(image.buffer)).toBe(true);
-    expect(image.buffer.toString()).toBe('png-data');
+    it('returns 503 AI_IMAGE_PROVIDER_UNAVAILABLE for invalid/unavailable image model', async () => {
+      mockGenerateContent.mockRejectedValueOnce({ status: 404, message: 'Model not found: gemini-2.5-flash-image' });
+      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-2.5-flash-image');
+
+      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect(error.getResponse()).toEqual(
+        expect.objectContaining({
+          code: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
+          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
+        }),
+      );
+    });
+
+    it('maps provider 4xx to AI_IMAGE_INVALID_REQUEST without leaking upstream text', async () => {
+      mockGenerateContent.mockRejectedValueOnce({ status: 400, message: 'invalid argument secret=abc' });
+
+      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
+      expect(error.getStatus()).toBe(400);
+      expect(error.getResponse()).toEqual(
+        expect.objectContaining({
+          code: 'AI_IMAGE_INVALID_REQUEST',
+          message: 'Yêu cầu tạo ảnh không hợp lệ. Vui lòng điều chỉnh mô tả và thử lại.',
+        }),
+      );
+      expect(JSON.stringify(error.getResponse())).not.toContain('secret=abc');
+    });
+
+    it('maps provider 5xx to AI_IMAGE_UPSTREAM_ERROR', async () => {
+      mockGenerateContent.mockRejectedValueOnce({ status: 500, message: 'backend exploded stacktrace' });
+      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-2.5-flash-image');
+
+      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect(error.getResponse()).toEqual(
+        expect.objectContaining({
+          code: 'AI_IMAGE_UPSTREAM_ERROR',
+          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
+        }),
+      );
+      expect(JSON.stringify(error.getResponse())).not.toContain('stacktrace');
+    });
+
+    it('throws AI_IMAGE_TIMEOUT when the provider call exceeds timeout', async () => {
+      mockGenerateContent.mockImplementation(() => new Promise(() => {}));
+      jest.spyOn(provider, 'getTimeoutForOperation').mockReturnValue(40);
+
+      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
+      expect(error).toBeInstanceOf(RequestTimeoutException);
+      expect(error.getResponse()).toEqual(expect.objectContaining({ code: 'AI_IMAGE_TIMEOUT' }));
+    });
+
+    it('falls back from retired Imagen generateImages to Gemini generateContent', async () => {
+      jest.spyOn(provider, 'getImageModelName').mockReturnValue('imagen-4.0-generate-001');
+      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-2.5-flash-image');
+      mockGenerateImages.mockRejectedValueOnce(new Error('Imagen models are deprecated and shut down'));
+      mockGenerateContent.mockResolvedValueOnce({
+        candidates: [
+          {
+            content: {
+              parts: [{ inlineData: { data: Buffer.from('fallback-png').toString('base64'), mimeType: 'image/png' } }],
+            },
+          },
+        ],
+      });
+
+      const image = await provider.generateImage({ operation: 'image', prompt: 'minh họa phân số' });
+      expect(image.buffer.toString()).toBe('fallback-png');
+      expect(mockGenerateImages).toHaveBeenCalled();
+      expect(mockGenerateContent).toHaveBeenCalled();
+    });
   });
 });

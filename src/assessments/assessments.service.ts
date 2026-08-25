@@ -72,12 +72,8 @@ export class AssessmentsService {
     const where: any = { deletedAt: null };
 
     if (teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
-      where.OR = [
-        { teacherId },
-        { teachingAssignment: { teacherId } },
-        { classroomId: { in: accessibleClassIds } },
-      ];
+      // Assessments are teacher-owned records; classroom access alone is not enough.
+      where.teacherId = teacherId;
     }
 
     if (classroomId && classroomId !== 'ALL') {
@@ -137,15 +133,8 @@ export class AssessmentsService {
       throw new NotFoundException(`Không tìm thấy đánh giá ${id}`);
     }
 
-    if (teacherId) {
-      const ownerTeacherId = assessment.teachingAssignment?.teacherId || assessment.teacherId;
-      const isOwner = ownerTeacherId === teacherId;
-      if (!isOwner) {
-        const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
-        if (!accessibleClassIds.includes(assessment.classroomId)) {
-          throw new ForbiddenException('Bạn không có quyền truy cập đánh giá này');
-        }
-      }
+    if (teacherId && assessment.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền truy cập đánh giá này');
     }
 
     const enrollments = await this.prisma.studentEnrollment.findMany({
@@ -310,12 +299,8 @@ export class AssessmentsService {
       throw new NotFoundException('Không tìm thấy đánh giá');
     }
 
-    const ownerTeacherId = existing.teachingAssignment?.teacherId || existing.teacherId;
-    if (ownerTeacherId !== teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
-      if (!accessibleClassIds.includes(existing.classroomId)) {
-        throw new ForbiddenException('Bạn không có quyền chỉnh sửa đánh giá này');
-      }
+    if (existing.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền thao tác với đánh giá này');
     }
 
     if (dto.version !== undefined && dto.version !== existing.version) {
@@ -375,12 +360,8 @@ export class AssessmentsService {
       throw new NotFoundException('Không tìm thấy đánh giá');
     }
 
-    const ownerTeacherId = existing.teachingAssignment?.teacherId || existing.teacherId;
-    if (ownerTeacherId !== teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
-      if (!accessibleClassIds.includes(existing.classroomId)) {
-        throw new ForbiddenException('Bạn không có quyền xóa đánh giá này');
-      }
+    if (existing.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền thao tác với đánh giá này');
     }
 
     await this.prisma.assessment.update({
@@ -441,6 +422,7 @@ export class AssessmentsService {
       deletedAt: null,
       semester,
     };
+    if (teacherId) assessmentWhere.teacherId = teacherId;
     if (subjectId && subjectId !== 'ALL') {
       assessmentWhere.subjectId = subjectId;
     }
@@ -586,12 +568,8 @@ export class AssessmentsService {
       throw new NotFoundException('Không tìm thấy đánh giá');
     }
 
-    const ownerTeacherId = assessment.teachingAssignment?.teacherId || assessment.teacherId;
-    if (ownerTeacherId !== teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
-      if (!accessibleClassIds.includes(assessment.classroomId)) {
-        throw new ForbiddenException('Bạn không có quyền chấm đánh giá này');
-      }
+    if (assessment.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền thao tác với đánh giá này');
     }
 
     const items: StudentAssessmentItemDto[] = (dto as any).scores || (dto as any).assessments || [];
@@ -705,12 +683,8 @@ export class AssessmentsService {
       throw new BadRequestException('Bài đánh giá không thuộc lớp học được chọn');
     }
 
-    const ownerTeacherId = assessment.teachingAssignment?.teacherId || assessment.teacherId;
-    if (ownerTeacherId !== teacherId) {
-      const accessibleClassIds = await this.getTeacherAccessibleClassroomIds(teacherId);
-      if (!accessibleClassIds.includes(classroomId)) {
-        throw new ForbiddenException('Bạn không có quyền nhập điểm cho lớp học này');
-      }
+    if (assessment.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền thao tác với đánh giá này');
     }
 
     // Fetch enrolled students of this class

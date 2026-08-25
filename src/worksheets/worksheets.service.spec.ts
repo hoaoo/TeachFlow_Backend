@@ -15,6 +15,13 @@ describe('WorksheetsService', () => {
       deleteMany: jest.fn(),
       createMany: jest.fn(),
     },
+    worksheetAssignment: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+    },
+    classroom: {
+      findFirst: jest.fn(),
+    },
     $transaction: jest.fn((cb: any) => cb(mockPrisma)),
   };
 
@@ -96,6 +103,48 @@ describe('WorksheetsService', () => {
     ).rejects.toThrow('db fail');
   });
 
+  it('assigns a worksheet only to an accessible classroom and keeps teacher ownership', async () => {
+    mockPrisma.worksheet.findUnique.mockResolvedValue({
+      id: 'ws-1',
+      teacherId: 't1',
+      deletedAt: null,
+      questions: [],
+    });
+    mockPrisma.classroom.findFirst.mockResolvedValue({ id: 'class-1', name: '1A', code: '1A' });
+    mockPrisma.worksheetAssignment.create.mockResolvedValue({
+      id: 'assignment-1',
+      worksheetId: 'ws-1',
+      classroomId: 'class-1',
+      teacherId: 't1',
+      assignedAt: new Date('2026-08-25T00:00:00.000Z'),
+      dueAt: null,
+      status: 'ASSIGNED',
+      classroom: { id: 'class-1', name: '1A', code: '1A' },
+    });
+
+    const result = await service.assign('ws-1', { classroomId: 'class-1' }, 't1');
+
+    expect(result.classroom.name).toBe('1A');
+    expect(mockPrisma.worksheetAssignment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ worksheetId: 'ws-1', teacherId: 't1', classroomId: 'class-1' }),
+      }),
+    );
+  });
+
+  it('blocks assigning another teacher worksheet', async () => {
+    mockPrisma.worksheet.findUnique.mockResolvedValue({
+      id: 'ws-B',
+      teacherId: 'teacher-B',
+      deletedAt: null,
+      questions: [],
+    });
+
+    await expect(
+      service.assign('ws-B', { classroomId: 'class-1' }, 'teacher-A'),
+    ).rejects.toThrow(ForbiddenException);
+    expect(mockPrisma.classroom.findFirst).not.toHaveBeenCalled();
+  });
   it('builds a preview render model from unsaved draft', () => {
     const preview = service.previewDraft({
       title: 'Phiếu nháp',

@@ -145,6 +145,7 @@ model Teacher {
   lessonPlans            LessonPlan[]
   teachingActivities     TeachingActivity[]
   worksheets             Worksheet[]
+  worksheetAssignments   WorksheetAssignment[]
   attendanceSessions     AttendanceSession[]
   assessments            Assessment[]
   studentComments        StudentComment[]
@@ -266,6 +267,7 @@ model Classroom {
   assessments            Assessment[]
   studentComments        StudentComment[]
   worksheets             Worksheet[]
+  worksheetAssignments   WorksheetAssignment[]
   studentBehaviorRecords StudentBehaviorRecord[]
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
@@ -275,7 +277,7 @@ model Classroom {
   schedules              Schedule[]
   classSubjects          ClassSubject[]
 
-  @@unique([schoolYearId, code])
+  @@unique([teacherId, schoolYearId, code])
   @@index([schoolYearId])
   @@index([gradeId])
   @@index([teacherId])
@@ -622,6 +624,27 @@ model Worksheet {
   lesson    Lesson?             @relation(fields: [lessonId], references: [id])
   classroom Classroom?          @relation(fields: [classroomId], references: [id])
   questions WorksheetQuestion[]
+  assignments WorksheetAssignment[]
+}
+
+model WorksheetAssignment {
+  id          String   @id @default(uuid())
+  worksheetId String
+  classroomId String
+  teacherId   String
+  assignedAt  DateTime @default(now())
+  dueAt       DateTime?
+  status      String   @default("ASSIGNED")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  worksheet Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  teacher   Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@unique([worksheetId, classroomId])
+  @@index([teacherId, classroomId])
+  @@index([teacherId, assignedAt])
 }
 
 model WorksheetQuestion {
@@ -646,7 +669,7 @@ model AttendanceSession {
   teacherId            String
   teachingAssignmentId String?
   attendanceDate       DateTime  @db.Date
-  sessionPeriod        String?   @default("MORNING")
+  sessionPeriod        String    @default("MORNING")
   title                String?
   status               String?   @default("COMPLETED")
   note                 String?   @db.Text
@@ -667,6 +690,8 @@ model AttendanceSession {
   @@index([classroomId, attendanceDate])
   @@index([teacherId, attendanceDate])
   @@index([teachingAssignmentId])
+
+  @@unique([classroomId, attendanceDate, sessionPeriod])
 }
 
 model StudentAttendance {

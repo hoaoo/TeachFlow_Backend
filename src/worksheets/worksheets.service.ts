@@ -2,10 +2,12 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorksheetDto } from './dto/create-worksheet.dto';
 import { UpdateWorksheetDto } from './dto/update-worksheet.dto';
+import { AssignWorksheetDto } from './dto/assign-worksheet.dto';
 import { WorksheetQuestionInputDto } from './dto/worksheet-question.dto';
 import { worksheetToRenderModel, WorksheetRenderModel } from '../export/render-models';
 
@@ -214,6 +216,100 @@ export class WorksheetsService {
     return this.mapWorksheet(copy);
   }
 
+  async assign(id: string, dto: AssignWorksheetDto, teacherId: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Tài khoản hiện tại không có hồ sơ giáo viên');
+    }
+
+    const worksheet = await this.findOne(id, teacherId);
+    const classroom = await this.prisma.classroom.findFirst({
+      where: {
+        id: dto.classroomId,
+        isActive: true,
+        deletedAt: null,
+        OR: [
+          { teacherId },
+          { homeroomTeacherId: teacherId },
+          { teachingAssignments: { some: { teacherId, isActive: true } } },
+        ],
+      },
+      select: { id: true, name: true, code: true },
+    });
+
+    if (!classroom) {
+      throw new ForbiddenException('Bạn không có quyền giao phiếu cho lớp này');
+    }
+
+    try {
+      const assignment = await this.prisma.worksheetAssignment.create({
+        data: {
+          worksheetId: worksheet.id,
+          classroomId: classroom.id,
+          teacherId,
+          dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
+        },
+        include: {
+          classroom: { select: { id: true, name: true, code: true } },
+        },
+      });
+
+      return {
+        id: assignment.id,
+        worksheetId: assignment.worksheetId,
+        classroom: assignment.classroom,
+        assignedAt: assignment.assignedAt,
+        dueAt: assignment.dueAt,
+        status: assignment.status,
+      };
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new ConflictException('Phiếu học tập đã được giao cho lớp này');
+      }
+      throw error;
+    }
+  }
+
+  async getAssignments(id: string, teacherId: string) {
+    await this.findOne(id, teacherId);
+
+    return this.prisma.worksheetAssignment.findMany({
+      where: { worksheetId: id, teacherId },
+      include: {
+        classroom: { select: { id: true, name: true, code: true } },
+      },
+      orderBy: { assignedAt: 'desc' },
+    });
+  }
+
+  async getClassroomAssignments(classroomId: string, teacherId: string) {
+    const classroom = await this.prisma.classroom.findFirst({
+      where: {
+        id: classroomId,
+        isActive: true,
+        deletedAt: null,
+        OR: [
+          { teacherId },
+          { homeroomTeacherId: teacherId },
+          { teachingAssignments: { some: { teacherId, isActive: true } } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (!classroom) {
+      throw new ForbiddenException('Bạn không có quyền truy cập lớp này');
+    }
+
+    return this.prisma.worksheetAssignment.findMany({
+      where: { classroomId, teacherId },
+      include: {
+        worksheet: {
+          select: { id: true, title: true, status: true, subjectId: true, gradeId: true },
+        },
+      },
+      orderBy: { assignedAt: 'desc' },
+    });
+  }
   private normalizeQuestion(question: WorksheetQuestionInputDto, index: number) {
     const questionType = QUESTION_TYPES.has(question.questionType)
       ? question.questionType

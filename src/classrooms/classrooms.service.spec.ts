@@ -188,6 +188,34 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('allows the same class code for two different teachers in one school year', async () => {
+      mockPrisma.schoolYear.findUnique.mockResolvedValue(mockSchoolYearCurrent);
+      mockPrisma.grade.findUnique.mockResolvedValue(mockGrade4);
+      mockPrisma.teacher.findUnique.mockResolvedValue(mockTeacherA);
+      mockPrisma.classroom.findFirst.mockResolvedValue(null);
+      mockPrisma.classroom.create
+        .mockResolvedValueOnce({ ...mockClassroomA, teacherId: 'teacher-a' })
+        .mockResolvedValueOnce({ ...mockClassroomA, id: 'class-b', teacherId: 'teacher-b' });
+
+      const dto = {
+        schoolYearId: 'sy-2026',
+        gradeId: 'grade-4',
+        code: '1A',
+        name: '1A',
+      };
+
+      await service.create(dto, 'teacher-a');
+      await service.create(dto, 'teacher-b');
+
+      expect(mockPrisma.classroom.create).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ data: expect.objectContaining({ teacherId: 'teacher-a', code: '1A' }) }),
+      );
+      expect(mockPrisma.classroom.create).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ data: expect.objectContaining({ teacherId: 'teacher-b', code: '1A' }) }),
+      );
+    });
     it('should allow same code in a different school year', async () => {
       mockPrisma.schoolYear.findUnique.mockResolvedValueOnce(mockSchoolYearOther);
       mockPrisma.grade.findUnique.mockResolvedValueOnce(mockGrade4);
