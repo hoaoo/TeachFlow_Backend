@@ -1,5 +1,6 @@
 import { BadRequestException, PayloadTooLargeException } from '@nestjs/common';
 import * as path from 'path';
+import { decodeVietnameseFilename } from '../export/export.utils';
 
 export const ALLOWED_EXTENSIONS = [
   '.pdf',
@@ -130,9 +131,10 @@ export function validateUploadedFile(
     throw new BadRequestException('Vui lòng chọn tập tin tải lên');
   }
 
-  // 1. Sanitize original filename and extract extension
+  // 1. Sanitize original filename and extract extension with Vietnamese Unicode preservation
   const rawName = file.originalname || 'uploaded_file';
-  const baseName = path.basename(rawName);
+  const decodedName = decodeVietnameseFilename(rawName);
+  const baseName = path.basename(decodedName);
   const ext = path.extname(baseName).toLowerCase();
 
   if (!ext) {
@@ -195,8 +197,12 @@ export function validateUploadedFile(
     }
   }
 
-  // Clean original filename for display
-  const sanitizedOriginalName = baseName.replace(/[\/\\?%*:|"<>]/g, '_').slice(0, 120);
+  // Clean original filename for display, preserve Vietnamese characters
+  const sanitizedOriginalName = baseName
+    .replace(/[\/\\?%*:|"<>]/g, '_')
+    .replace(/[\r\n\0]/g, '')
+    .trim()
+    .slice(0, 120);
 
   return {
     extension: ext,

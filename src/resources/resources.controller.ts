@@ -105,12 +105,13 @@ export class ResourcesController {
   ) {
     const fileInfo = await this.resourcesService.getFileForDownload(id, user);
 
-    const ext = (fileInfo.originalFileName.split('.').pop() || 'dat') as any;
+    const ext = fileInfo.originalFileName.split('.').pop() || 'dat';
     const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
 
-    res.setHeader('Content-Type', fileInfo.mimeType);
-    res.setHeader('Content-Disposition', buildContentDisposition(asciiFilename, utf8Filename));
+    res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', buildContentDisposition(asciiFilename, utf8Filename, 'attachment'));
+    res.setHeader('Accept-Ranges', 'bytes');
     if (fileInfo.size) {
       res.setHeader('Content-Length', fileInfo.size);
     }
@@ -128,12 +129,13 @@ export class ResourcesController {
   ) {
     const fileInfo = await this.resourcesService.getFileForDownload(id, user);
 
-    const ext = (fileInfo.originalFileName.split('.').pop() || 'dat') as any;
+    const ext = fileInfo.originalFileName.split('.').pop() || 'dat';
     const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
 
-    res.setHeader('Content-Type', fileInfo.mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(utf8Filename)}`);
+    res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', buildContentDisposition(asciiFilename, utf8Filename, 'inline'));
+    res.setHeader('Accept-Ranges', 'bytes');
     if (fileInfo.size) {
       res.setHeader('Content-Length', fileInfo.size);
     }
