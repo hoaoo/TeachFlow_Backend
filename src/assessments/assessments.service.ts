@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { AcademicCalculationService } from './academic-calculation.service';
+import { AssessmentLevel } from '@prisma/client';
 import { CreateAssessmentDto } from './dto/create-assessment.dto';
 import {
   UpdateAssessmentDto,
@@ -331,15 +332,15 @@ export class AssessmentsService {
       });
     }
 
-    const effectiveLevel =
+    const effectiveLevel: AssessmentLevel =
       dto.level ||
       (dto.score !== undefined
-        ? dto.score >= 9
-          ? AssessmentLevelEnum.EXCELLENT
-          : dto.score >= 5
-          ? AssessmentLevelEnum.COMPLETED
-          : AssessmentLevelEnum.NEEDS_SUPPORT
-        : AssessmentLevelEnum.COMPLETED);
+        ? dto.score >= 8.0
+          ? AssessmentLevel.EXCELLENT
+          : dto.score >= 5.0
+          ? AssessmentLevel.COMPLETED
+          : AssessmentLevel.NEEDS_SUPPORT
+        : AssessmentLevel.COMPLETED);
 
     // Record for each student
     for (const studentId of dto.studentIds) {
@@ -388,12 +389,12 @@ export class AssessmentsService {
       }
 
       // If marked as NEEDS_SUPPORT, update student status
-      if (effectiveLevel === AssessmentLevelEnum.NEEDS_SUPPORT) {
+      if (effectiveLevel === AssessmentLevel.NEEDS_SUPPORT) {
         await this.prisma.student.update({
           where: { id: studentId },
           data: { status: 'NEEDS_SUPPORT' },
         });
-      } else if (effectiveLevel === AssessmentLevelEnum.EXCELLENT) {
+      } else if (effectiveLevel === AssessmentLevel.EXCELLENT) {
         await this.prisma.student.update({
           where: { id: studentId },
           data: { status: 'EXCELLENT' },
@@ -739,14 +740,14 @@ export class AssessmentsService {
     return this.prisma.$transaction(async (tx) => {
       for (const item of items) {
         // Derive level from score if not explicitly set
-        let level: AssessmentLevelEnum = item.level || AssessmentLevelEnum.COMPLETED;
+        let level: AssessmentLevel = item.level || AssessmentLevel.COMPLETED;
         if (item.score !== null && item.score !== undefined) {
           if (item.score >= 8.0) {
-            level = AssessmentLevelEnum.EXCELLENT;
+            level = AssessmentLevel.EXCELLENT;
           } else if (item.score >= 5.0) {
-            level = AssessmentLevelEnum.COMPLETED;
+            level = AssessmentLevel.COMPLETED;
           } else {
-            level = AssessmentLevelEnum.NEEDS_SUPPORT;
+            level = AssessmentLevel.NEEDS_SUPPORT;
           }
         }
 
@@ -762,7 +763,7 @@ export class AssessmentsService {
           await tx.studentAssessment.update({
             where: { id: existing.id },
             data: {
-              level: level as any,
+              level,
               score: item.score !== undefined ? item.score : existing.score,
               comment: item.comment !== undefined ? item.comment : existing.comment,
             },
@@ -773,7 +774,7 @@ export class AssessmentsService {
               assessmentId: id,
               studentId: item.studentId,
               assessmentCriterionId: item.criterionId || null,
-              level: level as any,
+              level,
               score: item.score,
               comment: item.comment,
             },

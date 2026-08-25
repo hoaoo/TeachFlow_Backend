@@ -1,20 +1,16 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
+import { AssessmentLevel } from '@prisma/client';
 import { CreateAssessmentDto } from './create-assessment.dto';
+
+export { AssessmentLevel, AssessmentLevel as AssessmentLevelEnum };
 
 export class UpdateAssessmentDto extends PartialType(CreateAssessmentDto) {
   @ApiPropertyOptional({ description: 'Version cho optimistic concurrency' })
   @IsOptional()
   @IsInt()
   version?: number;
-}
-
-export enum AssessmentLevelEnum {
-  EXCELLENT = 'EXCELLENT',
-  GOOD = 'GOOD',
-  COMPLETED = 'COMPLETED',
-  NEEDS_SUPPORT = 'NEEDS_SUPPORT',
 }
 
 export class StudentAssessmentItemDto {
@@ -28,10 +24,10 @@ export class StudentAssessmentItemDto {
   @IsString()
   criterionId?: string;
 
-  @ApiPropertyOptional({ enum: AssessmentLevelEnum, default: AssessmentLevelEnum.COMPLETED })
+  @ApiPropertyOptional({ enum: AssessmentLevel, default: AssessmentLevel.COMPLETED })
   @IsOptional()
-  @IsEnum(AssessmentLevelEnum)
-  level?: AssessmentLevelEnum = AssessmentLevelEnum.COMPLETED;
+  @IsEnum(AssessmentLevel)
+  level?: AssessmentLevel = AssessmentLevel.COMPLETED;
 
   @ApiPropertyOptional({ description: 'Điểm số (0 đến 10), hoặc null để xóa điểm', example: 8.5 })
   @IsOptional()

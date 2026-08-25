@@ -1,6 +1,6 @@
-﻿import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
-import { AssessmentLevelEnum } from './bulk-student-assessment.dto';
+import { AssessmentLevel } from '@prisma/client';
 
 export class QuickAssessmentDto {
   @ApiProperty({ example: ['student-uuid-1', 'student-uuid-2'], description: 'Danh sách ID học sinh được đánh giá' })
@@ -23,10 +23,10 @@ export class QuickAssessmentDto {
   @IsNotEmpty({ message: 'Tiêu đề đánh giá không được để trống' })
   title: string;
 
-  @ApiPropertyOptional({ enum: AssessmentLevelEnum, example: AssessmentLevelEnum.COMPLETED, description: 'Mức độ đánh giá (EXCELLENT, COMPLETED, NEEDS_SUPPORT)' })
+  @ApiPropertyOptional({ enum: AssessmentLevel, example: AssessmentLevel.COMPLETED, description: 'Mức độ đánh giá (EXCELLENT, COMPLETED, NEEDS_SUPPORT)' })
   @IsOptional()
-  @IsEnum(AssessmentLevelEnum)
-  level?: AssessmentLevelEnum;
+  @IsEnum(AssessmentLevel)
+  level?: AssessmentLevel;
 
   @ApiPropertyOptional({ example: 9, description: 'Điểm số từ 0 - 10 (nếu có)' })
   @IsOptional()
