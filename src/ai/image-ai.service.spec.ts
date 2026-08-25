@@ -9,7 +9,7 @@ describe('ImageAiService', () => {
   let service: ImageAiService;
   const mockProvider = {
     generateImage: jest.fn(),
-    getImageModelName: jest.fn().mockReturnValue('gemini-2.5-flash-image'),
+    getImageModelName: jest.fn().mockReturnValue('gemini-3.1-flash-image'),
   };
   const mockResources = {
     saveGeneratedFile: jest.fn(),
@@ -83,7 +83,7 @@ describe('ImageAiService', () => {
 
   it('maps storage failure to AI_IMAGE_STORAGE_FAILED without leaking internals', async () => {
     mockProvider.generateImage.mockResolvedValue({ buffer: Buffer.from('png'), mimeType: 'image/png' });
-    mockProvider.getImageModelName = jest.fn().mockReturnValue('gemini-2.5-flash-image');
+    mockProvider.getImageModelName = jest.fn().mockReturnValue('gemini-3.1-flash-image');
     mockResources.saveGeneratedFile.mockRejectedValue(new Error('EACCES /uploads/resources/secret-path'));
 
     const error: any = await service

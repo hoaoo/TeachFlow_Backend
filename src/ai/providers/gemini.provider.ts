@@ -82,19 +82,19 @@ export class GeminiProvider implements AiProvider {
   }
 
   getModelName(): string {
-    return this.getEnvString('GEMINI_MODEL') || this.getEnvString('GEMINI_PRIMARY_MODEL') || 'gemini-3.6-flash';
+    return this.getEnvString('GEMINI_MODEL') || this.getEnvString('GEMINI_PRIMARY_MODEL') || 'gemini-3.7-flash';
   }
 
   getFallbackModelName(): string {
-    return this.getEnvString('GEMINI_FALLBACK_MODEL') || 'gemini-2.5-flash';
+    return this.getEnvString('GEMINI_FALLBACK_MODEL') || 'gemini-3.6-flash';
   }
 
   getImageModelName(): string {
-    return this.getEnvString('GEMINI_IMAGE_MODEL') || 'gemini-2.5-flash-image';
+    return this.getEnvString('GEMINI_IMAGE_MODEL') || 'gemini-3.1-flash-image';
   }
 
   getImageFallbackModelName(): string {
-    return this.getEnvString('GEMINI_IMAGE_FALLBACK_MODEL') || 'gemini-2.5-flash-image';
+    return this.getEnvString('GEMINI_IMAGE_FALLBACK_MODEL') || 'gemini-3.1-flash-lite-image';
   }
 
   private isImagenModel(model: string): boolean {
@@ -369,10 +369,27 @@ export class GeminiProvider implements AiProvider {
         `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory}`,
       );
 
+      const fallbackModel = this.getFallbackModelName();
+      if (modelToUse !== fallbackModel && errorCategory === 'MODEL_NOT_FOUND') {
+        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to ${fallbackModel}`);
+        try {
+          const fallbackResult = await runCall(fallbackModel);
+          this.logger.log(
+            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
+          );
+          return fallbackResult;
+        } catch (fallbackError: any) {
+          const fallbackCategory = this.categorizeError(fallbackError);
+          this.logger.error(
+            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${fallbackCategory}`,
+          );
+        }
+      }
+
       if (errorCategory === 'TIMEOUT' || error instanceof RequestTimeoutException) {
         throw error;
       }
-      if (retryCount > 0 && errorCategory !== 'AUTH_ERROR' && errorCategory !== 'QUOTA_EXCEEDED') {
+      if (retryCount > 0 && errorCategory !== 'AUTH_ERROR' && errorCategory !== 'QUOTA_EXCEEDED' && errorCategory !== 'MODEL_NOT_FOUND') {
         return this.generateText({ ...options, retryCount: retryCount - 1 });
       }
       throw new InternalServerErrorException('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
@@ -582,7 +599,9 @@ export class GeminiProvider implements AiProvider {
         );
         try {
           model = fallbackModel;
-          const result = await generateViaContent(fallbackModel);
+          const result = await (this.isImagenModel(fallbackModel)
+            ? generateViaImagen(fallbackModel)
+            : generateViaContent(fallbackModel));
           this.logImageEvent({
             model: fallbackModel,
             stage: 'provider_api',

@@ -24,7 +24,16 @@ export interface ValidatedEnvironment {
   JWT_AUDIENCE: string;
   RESOURCE_UPLOAD_DIR: string;
   RESOURCE_MAX_FILE_SIZE_MB: number;
+  RESOURCE_MAX_IMAGE_MB: number;
+  RESOURCE_MAX_DOC_MB: number;
+  RESOURCE_MAX_SHEET_MB: number;
+  RESOURCE_MAX_PPT_MB: number;
+  RESOURCE_MAX_VIDEO_MB: number;
   IMPORT_MAX_FILE_SIZE_MB: number;
+  GEMINI_MODEL: string;
+  GEMINI_FALLBACK_MODEL: string;
+  GEMINI_IMAGE_MODEL: string;
+  GEMINI_IMAGE_FALLBACK_MODEL: string;
 }
 
 export function validateEnvironment(): ValidatedEnvironment {
@@ -96,7 +105,16 @@ export function validateEnvironment(): ValidatedEnvironment {
     JWT_ISSUER: process.env.JWT_ISSUER || 'teachflow-backend',
     JWT_AUDIENCE: process.env.JWT_AUDIENCE || 'teachflow-frontend',
     RESOURCE_UPLOAD_DIR: process.env.RESOURCE_UPLOAD_DIR || 'uploads/resources',
-    RESOURCE_MAX_FILE_SIZE_MB: parseInt(process.env.RESOURCE_MAX_FILE_SIZE_MB || '25', 10),
+    RESOURCE_MAX_FILE_SIZE_MB: parseInt(process.env.RESOURCE_MAX_FILE_SIZE_MB || '50', 10),
+    RESOURCE_MAX_IMAGE_MB: parseInt(process.env.RESOURCE_MAX_IMAGE_MB || '20', 10),
+    RESOURCE_MAX_DOC_MB: parseInt(process.env.RESOURCE_MAX_DOC_MB || '50', 10),
+    RESOURCE_MAX_SHEET_MB: parseInt(process.env.RESOURCE_MAX_SHEET_MB || '50', 10),
+    RESOURCE_MAX_PPT_MB: parseInt(process.env.RESOURCE_MAX_PPT_MB || '100', 10),
+    RESOURCE_MAX_VIDEO_MB: parseInt(process.env.RESOURCE_MAX_VIDEO_MB || '500', 10),
     IMPORT_MAX_FILE_SIZE_MB: parseInt(process.env.IMPORT_MAX_FILE_SIZE_MB || '10', 10),
+    GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3.7-flash',
+    GEMINI_FALLBACK_MODEL: process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash',
+    GEMINI_IMAGE_MODEL: process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image',
+    GEMINI_IMAGE_FALLBACK_MODEL: process.env.GEMINI_IMAGE_FALLBACK_MODEL || 'gemini-3.1-flash-lite-image',
   };
 }

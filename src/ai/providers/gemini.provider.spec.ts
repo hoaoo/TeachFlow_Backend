@@ -61,7 +61,7 @@ describe('GeminiProvider', () => {
     });
 
     expect(res).toEqual(mockResult);
-    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.6-flash');
+    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
     expect(mockGenerateContent.mock.calls[0][0].config.responseMimeType).toBe('application/json');
   });
 
@@ -89,8 +89,8 @@ describe('GeminiProvider', () => {
     ).rejects.toThrow(ServiceUnavailableException);
   });
 
-  it('falls back to gemini-2.5-flash when primary model is not found', async () => {
-    mockGenerateContent.mockRejectedValueOnce(new Error('Model not found: gemini-3.6-flash'));
+  it('falls back to gemini-3.6-flash when primary model is not found', async () => {
+    mockGenerateContent.mockRejectedValueOnce(new Error('Model not found: gemini-3.7-flash'));
     mockGenerateContent.mockResolvedValueOnce({ text: JSON.stringify({ title: 'ok' }) });
 
     const res = await provider.generateStructured({
@@ -102,7 +102,7 @@ describe('GeminiProvider', () => {
 
     expect(res).toEqual({ title: 'ok' });
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-    expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-2.5-flash');
+    expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.6-flash');
   });
 
   it('throws RequestTimeoutException and does not retry on timeout', async () => {
@@ -222,8 +222,8 @@ describe('GeminiProvider', () => {
     });
 
     it('returns 503 AI_IMAGE_PROVIDER_UNAVAILABLE for invalid/unavailable image model', async () => {
-      mockGenerateContent.mockRejectedValueOnce({ status: 404, message: 'Model not found: gemini-2.5-flash-image' });
-      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-2.5-flash-image');
+      mockGenerateContent.mockRejectedValueOnce({ status: 404, message: 'Model not found: gemini-3.1-flash-image' });
+      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-lite-image');
 
       const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
       expect(error).toBeInstanceOf(ServiceUnavailableException);
@@ -251,7 +251,7 @@ describe('GeminiProvider', () => {
 
     it('maps provider 5xx to AI_IMAGE_UPSTREAM_ERROR', async () => {
       mockGenerateContent.mockRejectedValueOnce({ status: 500, message: 'backend exploded stacktrace' });
-      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-2.5-flash-image');
+      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-lite-image');
 
       const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
       expect(error).toBeInstanceOf(ServiceUnavailableException);
@@ -275,7 +275,7 @@ describe('GeminiProvider', () => {
 
     it('falls back from retired Imagen generateImages to Gemini generateContent', async () => {
       jest.spyOn(provider, 'getImageModelName').mockReturnValue('imagen-4.0-generate-001');
-      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-2.5-flash-image');
+      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-image');
       mockGenerateImages.mockRejectedValueOnce(new Error('Imagen models are deprecated and shut down'));
       mockGenerateContent.mockResolvedValueOnce({
         candidates: [
