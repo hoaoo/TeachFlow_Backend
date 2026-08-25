@@ -524,5 +524,37 @@ describe('StudentsService (Production Unit Tests)', () => {
         expect.objectContaining({ action: 'STUDENT_IMPORT' }),
       );
     });
+
+    it('does not import into another teacher classroom', async () => {
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce({
+        ...mockClass1G,
+        teacherId: 'teacher-b',
+        id: 'class-b',
+      });
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([]);
+
+      await expect(
+        service.importStudents(
+          { classroomId: 'class-b', students: [{ fullName: 'Học sinh 1' }] },
+          'teacher-a',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rolls back when the import transaction fails', async () => {
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce(mockClass1G);
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClass1G]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);
+      mockPrisma.student.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.student.count.mockResolvedValueOnce(10);
+      mockPrisma.$transaction.mockRejectedValueOnce(new Error('db fail'));
+
+      await expect(
+        service.importStudents(
+          { classroomId: 'class-1g', students: [{ fullName: 'Học sinh 1', studentCode: 'HS101' }] },
+          'teacher-a',
+        ),
+      ).rejects.toThrow('db fail');
+    });
   });
 });

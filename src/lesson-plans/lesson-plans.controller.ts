@@ -87,6 +87,24 @@ export class LessonPlansController {
     return this.lessonPlansService.uploadLessonPlan(file, dto, user.teacherId);
   }
 
+  @Post('preview')
+  @ApiOperation({ summary: 'Xem trước giáo án chưa lưu (JSON render model dùng chung với Word/PDF)' })
+  async previewDraft(
+    @Body() dto: CreateLessonPlanDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.previewDraft(dto, user.teacherName);
+  }
+
+  @Get(':id/preview')
+  @ApiOperation({ summary: 'Xem trước giáo án đã lưu (JSON render model dùng chung với Word/PDF)' })
+  async previewById(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.previewById(id, user.teacherId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Xem chi tiết giáo án' })
   async findOne(

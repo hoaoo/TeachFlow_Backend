@@ -35,7 +35,7 @@ export const worksheetSchema: Schema = {
             description: 'Giải thích chi tiết hoặc gợi ý chấm',
           },
         },
-        required: ['questionType', 'content', 'options', 'correctAnswer', 'explanation'],
+        required: ['questionType', 'content'],
       },
     },
   },

@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { StorageService } from '../resources/storage/storage.service';
+import { lessonPlanToRenderModel, LessonPlanRenderModel } from '../export/render-models';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
@@ -193,6 +194,15 @@ export class LessonPlansService {
     return this.mapLessonPlanDetail(plan);
   }
 
+  async previewById(id: string, teacherId?: string): Promise<LessonPlanRenderModel> {
+    const plan = await this.findOne(id, teacherId);
+    return lessonPlanToRenderModel(plan);
+  }
+
+  previewDraft(dto: CreateLessonPlanDto, teacherName?: string): LessonPlanRenderModel {
+    return lessonPlanToRenderModel(dto, teacherName);
+  }
+
   async create(dto: CreateLessonPlanDto, teacherId: string) {
     let assignmentId: string | null = null;
     let effectiveClassroomId = dto.classroomId;
@@ -270,6 +280,7 @@ export class LessonPlansService {
             tx.lessonPlanActivity.create({
               data: {
                 lessonPlanId: plan.id,
+                activityType: this.mapPhaseToActivityType(act.phase) as any,
                 phase: act.phase || 'Hoạt động',
                 title: act.title,
                 durationMinutes: act.minutes || 5,
@@ -1207,6 +1218,17 @@ export class LessonPlansService {
       tone: r.tone || 'teal',
       createdAt: r.createdAt,
     };
+  }
+
+  private mapPhaseToActivityType(phase?: string): string {
+    const raw = String(phase || '').toUpperCase();
+    if (raw.includes('WARM') || raw.includes('KHỞI') || raw.includes('KHOI')) return 'WARM_UP';
+    if (raw.includes('EXPLORE') || raw.includes('KHÁM') || raw.includes('KHAM')) return 'EXPLORE';
+    if (raw.includes('PRACTICE') || raw.includes('LUYỆN') || raw.includes('LUYEN')) return 'PRACTICE';
+    if (raw.includes('APPLY') || raw.includes('APPLICATION') || raw.includes('VẬN') || raw.includes('VAN')) {
+      return 'APPLICATION';
+    }
+    return 'OTHER';
   }
 
   private mapActivity(act: any) {

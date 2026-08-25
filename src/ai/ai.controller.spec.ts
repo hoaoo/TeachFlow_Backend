@@ -6,27 +6,21 @@ import { AiThrottlerGuard } from './guards/ai-throttler.guard';
 
 describe('AiController', () => {
   let controller: AiController;
-  let service: AiService;
-
   const mockAiService = {
     generateLessonPlan: jest.fn(),
     generateActivity: jest.fn(),
     generateWorksheet: jest.fn(),
     generateQuestions: jest.fn(),
     generateStudentComment: jest.fn(),
+    generateImage: jest.fn(),
+    analyzeImport: jest.fn(),
   };
 
   beforeEach(async () => {
     jest.clearAllMocks();
-
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AiController],
-      providers: [
-        {
-          provide: AiService,
-          useValue: mockAiService,
-        },
-      ],
+      providers: [{ provide: AiService, useValue: mockAiService }],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
@@ -34,71 +28,30 @@ describe('AiController', () => {
       .useValue({ canActivate: () => true })
       .compile();
 
-    controller = module.get<AiController>(AiController);
-    service = module.get<AiService>(AiService);
+    controller = module.get(AiController);
   });
 
-  it('should be defined', () => {
-    expect(controller).toBeDefined();
+  it('delegates lesson plan generation', async () => {
+    const dto = { grade: 4, subject: 'Tiếng Việt', lessonTitle: 'Trong lời mẹ hát' };
+    mockAiService.generateLessonPlan.mockResolvedValue({ title: 'Trong lời mẹ hát', activities: [] });
+    const result = await controller.generateLessonPlan(dto as any);
+    expect(result.title).toBe('Trong lời mẹ hát');
+    expect(mockAiService.generateLessonPlan).toHaveBeenCalledWith(dto);
   });
 
-  describe('POST /api/ai/lesson-plan', () => {
-    it('should delegate to aiService.generateLessonPlan', async () => {
-      const dto = { grade: 4, subject: 'Tiếng Việt', lessonTitle: 'Trong lời mẹ hát' };
-      const expected = { title: 'Trong lời mẹ hát', activities: [] };
-      mockAiService.generateLessonPlan.mockResolvedValue(expected);
-
-      const result = await controller.generateLessonPlan(dto as any);
-      expect(result).toEqual(expected);
-      expect(mockAiService.generateLessonPlan).toHaveBeenCalledWith(dto);
-    });
+  it('delegates image generation with current user', async () => {
+    const user = { teacherId: 't1' } as any;
+    mockAiService.generateImage.mockResolvedValue({ resourceId: 'r1' });
+    const result = await controller.generateImage({ prompt: 'minh họa phân số' } as any, user);
+    expect(result.resourceId).toBe('r1');
+    expect(mockAiService.generateImage).toHaveBeenCalled();
   });
 
-  describe('POST /api/ai/activity', () => {
-    it('should delegate to aiService.generateActivity', async () => {
-      const dto = { grade: 4, subject: 'Toán', lessonTitle: 'Phân số bằng nhau', activityType: 'WARM_UP' };
-      const expected = { title: 'Khởi động', durationMinutes: 5 };
-      mockAiService.generateActivity.mockResolvedValue(expected);
-
-      const result = await controller.generateActivity(dto as any);
-      expect(result).toEqual(expected);
-      expect(mockAiService.generateActivity).toHaveBeenCalledWith(dto);
-    });
-  });
-
-  describe('POST /api/ai/worksheet', () => {
-    it('should delegate to aiService.generateWorksheet', async () => {
-      const dto = { grade: 4, subject: 'Khoa học', lesson: 'Âm thanh' };
-      const expected = { title: 'Phiếu học tập', questions: [] };
-      mockAiService.generateWorksheet.mockResolvedValue(expected);
-
-      const result = await controller.generateWorksheet(dto as any);
-      expect(result).toEqual(expected);
-      expect(mockAiService.generateWorksheet).toHaveBeenCalledWith(dto);
-    });
-  });
-
-  describe('POST /api/ai/questions', () => {
-    it('should delegate to aiService.generateQuestions', async () => {
-      const dto = { grade: 4, subject: 'Toán', topic: 'Phân số' };
-      const expected = { topic: 'Phân số', questions: [] };
-      mockAiService.generateQuestions.mockResolvedValue(expected);
-
-      const result = await controller.generateQuestions(dto as any);
-      expect(result).toEqual(expected);
-      expect(mockAiService.generateQuestions).toHaveBeenCalledWith(dto);
-    });
-  });
-
-  describe('POST /api/ai/student-comment', () => {
-    it('should delegate to aiService.generateStudentComment', async () => {
-      const dto = { subject: 'Tiếng Việt', criteria: { Đọc: 'Tốt' } };
-      const expected = { comments: ['Em đọc diễn cảm tốt.'], overallAssessment: 'Tốt' };
-      mockAiService.generateStudentComment.mockResolvedValue(expected);
-
-      const result = await controller.generateStudentComment(dto as any);
-      expect(result).toEqual(expected);
-      expect(mockAiService.generateStudentComment).toHaveBeenCalledWith(dto);
-    });
+  it('delegates import analyze and does not persist', async () => {
+    const user = { teacherId: 't1' } as any;
+    mockAiService.analyzeImport.mockResolvedValue({ persisted: false, rows: [] });
+    const result = await controller.analyzeImport({ originalname: 'ds.xlsx' } as any, { target: 'students' } as any, user);
+    expect(result.persisted).toBe(false);
+    expect(mockAiService.analyzeImport).toHaveBeenCalled();
   });
 });

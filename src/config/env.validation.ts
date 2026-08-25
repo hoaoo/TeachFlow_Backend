@@ -24,6 +24,7 @@ export interface ValidatedEnvironment {
   JWT_AUDIENCE: string;
   RESOURCE_UPLOAD_DIR: string;
   RESOURCE_MAX_FILE_SIZE_MB: number;
+  IMPORT_MAX_FILE_SIZE_MB: number;
 }
 
 export function validateEnvironment(): ValidatedEnvironment {
@@ -96,5 +97,6 @@ export function validateEnvironment(): ValidatedEnvironment {
     JWT_AUDIENCE: process.env.JWT_AUDIENCE || 'teachflow-frontend',
     RESOURCE_UPLOAD_DIR: process.env.RESOURCE_UPLOAD_DIR || 'uploads/resources',
     RESOURCE_MAX_FILE_SIZE_MB: parseInt(process.env.RESOURCE_MAX_FILE_SIZE_MB || '25', 10),
+    IMPORT_MAX_FILE_SIZE_MB: parseInt(process.env.IMPORT_MAX_FILE_SIZE_MB || '10', 10),
   };
 }

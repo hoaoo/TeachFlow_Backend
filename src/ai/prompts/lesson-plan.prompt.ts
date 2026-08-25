@@ -2,14 +2,20 @@ import { GenerateLessonPlanDto } from '../dto/generate-lesson-plan.dto';
 
 export function buildLessonPlanPrompt(dto: GenerateLessonPlanDto): string {
   const duration = dto.durationMinutes || 35;
+  const extra = dto.additionalRequirements || dto.requirements;
   return `Hãy thiết kế một Kế hoạch bài dạy (Giáo án) tiểu học hoàn chỉnh theo định hướng phát triển phẩm chất, năng lực:
 
 Thông tin bài học:
 - Khối lớp: Lớp ${dto.grade}
 - Môn học: ${dto.subject}
 - Tên bài học: ${dto.lessonTitle}
+- Số tiết: ${dto.numberOfPeriods || 1}
 - Tổng thời lượng: ${duration} phút
-${dto.requirements ? `- Yêu cầu đặc biệt của giáo viên: ${dto.requirements}` : ''}
+${dto.objectives ? `- Yêu cầu cần đạt do giáo viên nêu: ${dto.objectives}` : ''}
+${dto.qualities ? `- Phẩm chất trọng tâm: ${dto.qualities}` : ''}
+${dto.competencies ? `- Năng lực trọng tâm: ${dto.competencies}` : ''}
+${dto.teacherContent ? `- Nội dung giáo viên đã soạn (tham khảo, đừng sao chép nguyên văn nếu chưa đủ): ${dto.teacherContent}` : ''}
+${extra ? `- Yêu cầu đặc biệt của giáo viên: ${extra}` : ''}
 
 Yêu cầu cấu trúc bài dạy:
 1. Xác định rõ mục tiêu cần đạt: Năng lực đặc thù của môn học, năng lực chung (tự chủ, giao tiếp hợp tác, giải quyết vấn đề) và phẩm chất (chăm chỉ, trung thực, trách nhiệm, nhân ái).

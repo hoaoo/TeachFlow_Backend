@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GenerateWorksheetDto {
@@ -13,11 +13,13 @@ export class GenerateWorksheetDto {
   @ApiProperty({ example: 'Toán', description: 'Tên môn học' })
   @IsString()
   @IsNotEmpty({ message: 'Tên môn học không được để trống' })
+  @MaxLength(100)
   subject: string;
 
   @ApiProperty({ example: 'Phân số bằng nhau', description: 'Tên bài học hoặc chủ đề' })
   @IsString()
   @IsNotEmpty({ message: 'Tên bài học không được để trống' })
+  @MaxLength(200)
   lesson: string;
 
   @ApiPropertyOptional({ example: 6, description: 'Số lượng câu hỏi', default: 5 })
@@ -41,4 +43,26 @@ export class GenerateWorksheetDto {
   @IsArray()
   @IsString({ each: true })
   questionTypes?: string[];
+
+  @ApiPropertyOptional({ example: 'Phân số bằng nhau có cùng giá trị', description: 'Nội dung kiến thức trọng tâm' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  knowledgeContent?: string;
+
+  @ApiPropertyOptional({ example: true, description: 'Có kèm đáp án cho giáo viên' })
+  @IsOptional()
+  @IsBoolean()
+  includeAnswers?: boolean;
+
+  @ApiPropertyOptional({ example: false, description: 'Gợi ý chỗ chèn hình minh họa' })
+  @IsOptional()
+  @IsBoolean()
+  includeIllustrations?: boolean;
+
+  @ApiPropertyOptional({ description: 'Yêu cầu bổ sung' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  additionalRequirements?: string;
 }

@@ -226,6 +226,19 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
         ForbiddenException,
       );
     });
+
+    it('Teacher A should receive ForbiddenException when previewing Lesson Plan of Teacher B', async () => {
+      mockPrisma.lessonPlan.findUnique.mockResolvedValue({
+        id: 'plan-B',
+        teacherId: teacherBId,
+        deletedAt: null,
+        title: 'Plan B',
+      });
+
+      await expect(lessonPlansService.previewById('plan-B', teacherAId)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
   });
 
   describe('3. Direct Object Access (IDOR) - Worksheet Module', () => {
@@ -237,6 +250,20 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
       });
 
       await expect(worksheetsService.findOne('worksheet-B', teacherAId)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('Teacher A should receive ForbiddenException when previewing Worksheet of Teacher B', async () => {
+      mockPrisma.worksheet.findUnique.mockResolvedValue({
+        id: 'worksheet-B',
+        teacherId: teacherBId,
+        deletedAt: null,
+        title: 'Phiếu B',
+        questions: [],
+      });
+
+      await expect(worksheetsService.previewById('worksheet-B', teacherAId)).rejects.toThrow(
         ForbiddenException,
       );
     });

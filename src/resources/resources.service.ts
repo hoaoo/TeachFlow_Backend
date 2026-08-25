@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
-import { validateUploadedFile } from './resources.validator';
+import { determineResourceType, validateUploadedFile } from './resources.validator';
 import { UploadResourceDto } from './dto/upload-resource.dto';
 import { CreateResourceDto, UpdateResourceDto } from './dto/create-resource.dto';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -92,6 +92,57 @@ export class ResourcesService {
 
     this.logger.log(
       `Resource uploaded: id=${resource.id} teacherId=${teacherId} size=${stored.size} type=${validation.resourceType}`,
+    );
+
+    return this.mapResourceResponse(resource);
+  }
+
+  /**
+   * Persist an AI-generated (or extracted) binary as a TeachingResource.
+   * Stores the file via StorageService; DB only keeps metadata/reference.
+   */
+  async saveGeneratedFile(
+    user: AuthenticatedUser,
+    params: {
+      buffer: Buffer;
+      extension: string;
+      mimeType: string;
+      name: string;
+      description?: string;
+      resourceType?: string;
+    },
+  ) {
+    const teacherId = await this.getTeacherId(user);
+    const ext = params.extension.startsWith('.') ? params.extension : `.${params.extension}`;
+    const stored = await this.storageService.saveBuffer(params.buffer, ext);
+    const displayName = (params.name || 'Tài nguyên AI').trim().slice(0, 120);
+    const sanitizedOriginalName = `${displayName.replace(/[\/\\?%*:|"<>]/g, '_')}${ext}`.slice(0, 120);
+
+    const resource = await this.prisma.teachingResource.create({
+      data: {
+        teacherId,
+        name: displayName,
+        title: displayName,
+        originalFileName: sanitizedOriginalName,
+        storedFileName: stored.storedFileName,
+        storagePath: stored.storagePath,
+        mimeType: params.mimeType || 'application/octet-stream',
+        size: stored.size,
+        resourceType: params.resourceType || determineResourceType(ext),
+        description: params.description || null,
+        status: 'ACTIVE',
+        meta: `${this.formatFileSize(stored.size)} · ${ext.toUpperCase().replace('.', '')} · AI`,
+        tone: 'teal',
+      },
+      include: {
+        subject: true,
+        grade: true,
+        lesson: true,
+      },
+    });
+
+    this.logger.log(
+      `Generated resource saved: id=${resource.id} teacherId=${teacherId} size=${stored.size} type=${resource.resourceType}`,
     );
 
     return this.mapResourceResponse(resource);
@@ -299,6 +350,7 @@ export class ResourcesService {
       name: r.name || r.title,
       title: r.title || r.name,
       originalFileName: r.originalFileName,
+      storedFileName: r.storedFileName,
       resourceType: r.resourceType || 'DOCUMENT',
       mimeType: r.mimeType,
       size: r.size,

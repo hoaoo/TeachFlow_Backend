@@ -6,6 +6,7 @@ export function buildWorksheetPrompt(dto: GenerateWorksheetDto): string {
   const types = dto.questionTypes && dto.questionTypes.length > 0
     ? dto.questionTypes.join(', ')
     : 'MULTIPLE_CHOICE, TRUE_FALSE, FILL_BLANK';
+  const includeAnswers = dto.includeAnswers !== false;
 
   return `Hãy biên soạn một Phiếu học tập tiểu học chất lượng cao dành cho học sinh:
 
@@ -16,6 +17,10 @@ Thông tin bài học:
 - Số lượng câu hỏi: ${count} câu
 - Độ khó: ${difficulty}
 - Các dạng câu hỏi mong muốn: ${types}
+${dto.knowledgeContent ? `- Nội dung kiến thức trọng tâm: ${dto.knowledgeContent}` : ''}
+${dto.additionalRequirements ? `- Yêu cầu bổ sung: ${dto.additionalRequirements}` : ''}
+- Có đáp án cho giáo viên: ${includeAnswers ? 'Có' : 'Vẫn trả correctAnswer/explanation nhưng ngắn gọn'}
+- Gợi ý hình minh họa: ${dto.includeIllustrations ? 'Có, mô tả ngắn trong explanation nếu câu hỏi cần hình' : 'Không bắt buộc'}
 
 Yêu cầu biên soạn:
 1. Câu hỏi phải rõ ràng, ngắn gọn, phù hợp với trình độ nhận thức của học sinh Lớp ${dto.grade}.

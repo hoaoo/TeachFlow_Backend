@@ -25,6 +25,24 @@ export class WorksheetsController {
     return this.worksheetsService.findAll(user.teacherId);
   }
 
+  @Post('preview')
+  @ApiOperation({ summary: 'Xem trước phiếu học tập chưa lưu (JSON render model)' })
+  async previewDraft(
+    @Body() dto: CreateWorksheetDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.worksheetsService.previewDraft(dto, user.teacherName);
+  }
+
+  @Get(':id/preview')
+  @ApiOperation({ summary: 'Xem trước phiếu học tập đã lưu (JSON render model)' })
+  async previewById(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.worksheetsService.previewById(id, user.teacherId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Xem chi tiết phiếu học tập' })
   async findOne(

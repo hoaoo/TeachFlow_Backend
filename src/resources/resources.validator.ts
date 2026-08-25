@@ -71,9 +71,32 @@ export function determineResourceType(ext: string): string {
   return 'DOCUMENT';
 }
 
+export const IMPORT_ALLOWED_EXTENSIONS = ['.docx', '.pdf', '.xlsx', '.xls', '.png', '.jpg', '.jpeg'];
+
+export function detectMimeFromMagicBytes(buffer?: Buffer | null): string | null {
+  if (!buffer || buffer.length < 4) return null;
+  if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+    return 'application/pdf';
+  }
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'image/png';
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0) {
+    return 'application/vnd.ms-excel';
+  }
+  if (buffer[0] === 0x50 && buffer[1] === 0x4b && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07)) {
+    return 'application/zip';
+  }
+  return null;
+}
+
 export function validateUploadedFile(
   file: Express.Multer.File,
   maxSizeMb = 25,
+  allowedExtensions: string[] = ALLOWED_EXTENSIONS,
 ): { extension: string; resourceType: string; sanitizedOriginalName: string } {
   if (!file) {
     throw new BadRequestException('Vui lòng chọn tập tin tải lên');
@@ -105,21 +128,40 @@ export function validateUploadedFile(
   }
 
   // 4. Check against allowlist
-  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+  if (!allowedExtensions.includes(ext)) {
     throw new BadRequestException(
-      `Định dạng tập tin (${ext}) không được hỗ trợ. Hệ thống chỉ hỗ trợ PDF, DOCX, PPTX, XLSX, PNG, JPG, WEBP, MP4`,
+      `Định dạng tập tin (${ext}) không được hỗ trợ. Hệ thống chỉ hỗ trợ ${allowedExtensions
+        .map((item) => item.replace('.', '').toUpperCase())
+        .join(', ')}`,
     );
   }
 
-  // 5. Validate MIME type if known
+  // 5. Validate MIME type if known — do not trust client MIME alone
   const clientMime = file.mimetype?.toLowerCase();
   const allowedMimes = MIME_TYPE_MAP[ext];
+  const magicMime = detectMimeFromMagicBytes(file.buffer);
   if (allowedMimes && clientMime && !allowedMimes.includes(clientMime)) {
-    // If browser sent generic application/octet-stream, we accept only if extension is whitelisted
     if (clientMime !== 'application/octet-stream') {
       throw new BadRequestException(
         `MIME type (${clientMime}) không khớp với định dạng tập tin (${ext})`,
       );
+    }
+  }
+  if (magicMime) {
+    if (ext === '.pdf' && magicMime !== 'application/pdf') {
+      throw new BadRequestException('Nội dung tệp không phải PDF hợp lệ');
+    }
+    if ((ext === '.png') && magicMime !== 'image/png') {
+      throw new BadRequestException('Nội dung tệp không phải PNG hợp lệ');
+    }
+    if ((ext === '.jpg' || ext === '.jpeg') && magicMime !== 'image/jpeg') {
+      throw new BadRequestException('Nội dung tệp không phải JPEG hợp lệ');
+    }
+    if (['.docx', '.xlsx'].includes(ext) && magicMime !== 'application/zip') {
+      throw new BadRequestException(`Nội dung tệp không khớp định dạng ${ext}`);
+    }
+    if (ext === '.xls' && magicMime !== 'application/vnd.ms-excel' && magicMime !== 'application/zip') {
+      throw new BadRequestException('Nội dung tệp không phải Excel hợp lệ');
     }
   }
 

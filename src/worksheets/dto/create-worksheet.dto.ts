@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsArray, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { WorksheetQuestionInputDto } from './worksheet-question.dto';
 
 export class CreateWorksheetDto {
   @ApiProperty({ example: 'Phiếu luyện tập phân số' })
@@ -41,4 +43,16 @@ export class CreateWorksheetDto {
   @IsOptional()
   @IsString()
   gradeId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  classroomId?: string;
+
+  @ApiPropertyOptional({ type: [WorksheetQuestionInputDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorksheetQuestionInputDto)
+  questions?: WorksheetQuestionInputDto[];
 }

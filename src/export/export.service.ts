@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { LessonPlanExportService, LessonPlanExportData } from './lesson-plan-export.service';
 import { WorksheetExportService, WorksheetExportData } from './worksheet-export.service';
+import { lessonPlanToRenderModel, worksheetToRenderModel } from './render-models';
 import { sanitizeFilename } from './export.utils';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
@@ -101,34 +102,7 @@ export class ExportService {
       throw new ForbiddenException('Bạn không có quyền xuất giáo án này');
     }
 
-    return {
-      id: plan.id,
-      title: plan.title,
-      subjectName: plan.subject?.name || plan.subjectName || 'Toán',
-      gradeName: plan.classroom?.name || plan.gradeName || 'Lớp 4A',
-      weekNumber: plan.weekNumber || 1,
-      periodNumber: plan.periodNumber || 1,
-      teachingDate: plan.teachingDate,
-      durationMinutes: plan.durationMinutes || 40,
-      objectives: plan.objectives,
-      teachingEquipment: plan.teachingEquipment,
-      postLessonAdjustment: plan.postLessonAdjustment,
-      teacherName: plan.teacher?.fullName || 'Giáo viên',
-      activities: (plan.activities || []).map((a) => ({
-        id: a.id,
-        phase: a.phase,
-        title: a.title,
-        durationMinutes: a.durationMinutes,
-        method: a.method,
-        technique: a.technique,
-        competencies: a.competencies,
-        qualities: a.qualities,
-        objective: a.objective,
-        teacherActivity: a.teacherActivity,
-        studentActivity: a.studentActivity,
-        sortOrder: a.sortOrder,
-      })),
-    };
+    return lessonPlanToRenderModel(plan) as LessonPlanExportData;
   }
 
   private async getWorksheetData(id: string, user: AuthenticatedUser): Promise<WorksheetExportData> {
@@ -153,23 +127,6 @@ export class ExportService {
       throw new ForbiddenException('Bạn không có quyền xuất phiếu học tập này');
     }
 
-    return {
-      id: worksheet.id,
-      title: worksheet.title,
-      subtitle: worksheet.subtitle,
-      subjectName: worksheet.subject?.name || 'Toán',
-      gradeName: worksheet.grade?.name || 'Khối 4',
-      lessonTitle: worksheet.lesson?.title || worksheet.title,
-      teacherName: worksheet.teacher?.fullName || 'Giáo viên',
-      questions: (worksheet.questions || []).map((q) => ({
-        id: q.id,
-        questionType: q.questionType,
-        content: q.content,
-        optionsJson: q.optionsJson,
-        correctAnswerJson: q.correctAnswerJson,
-        explanation: q.explanation,
-        sortOrder: q.sortOrder,
-      })),
-    };
+    return worksheetToRenderModel(worksheet) as WorksheetExportData;
   }
 }

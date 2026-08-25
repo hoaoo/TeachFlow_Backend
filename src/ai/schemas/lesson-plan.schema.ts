@@ -11,6 +11,18 @@ export const lessonPlanSchema: Schema = {
       type: Type.STRING,
       description: 'Mục tiêu bài dạy (Yêu cầu cần đạt về năng lực đặc thù, năng lực chung và phẩm chất)',
     },
+    specificCompetencies: {
+      type: Type.STRING,
+      description: 'Năng lực đặc thù của môn học',
+    },
+    generalCompetencies: {
+      type: Type.STRING,
+      description: 'Năng lực chung (tự chủ, giao tiếp hợp tác, giải quyết vấn đề)',
+    },
+    qualities: {
+      type: Type.STRING,
+      description: 'Phẩm chất (chăm chỉ, trung thực, trách nhiệm, nhân ái)',
+    },
     teachingEquipment: {
       type: Type.STRING,
       description: 'Đồ dùng và thiết bị dạy học của giáo viên và học sinh',
