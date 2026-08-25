@@ -5,6 +5,7 @@ import { AiThrottlerGuard } from './guards/ai-throttler.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { GeminiProvider } from './providers/gemini.provider';
+import { AiModelRouterService } from './router/ai-model-router.service';
 import { LessonPlanAiService } from './lesson-plan-ai.service';
 import { WorksheetAiService } from './worksheet-ai.service';
 import { ImageAiService } from './image-ai.service';
@@ -14,6 +15,7 @@ import { ImportAiService } from './import-ai.service';
   imports: [PrismaModule, ResourcesModule],
   controllers: [AiController],
   providers: [
+    AiModelRouterService,
     GeminiProvider,
     LessonPlanAiService,
     WorksheetAiService,
@@ -22,6 +24,6 @@ import { ImportAiService } from './import-ai.service';
     AiService,
     AiThrottlerGuard,
   ],
-  exports: [AiService, GeminiProvider],
+  exports: [AiService, GeminiProvider, AiModelRouterService],
 })
 export class AiModule {}

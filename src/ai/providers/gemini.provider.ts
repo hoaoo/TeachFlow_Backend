@@ -16,6 +16,7 @@ import {
   GeneratedImage,
 } from './ai-provider.interface';
 import { SYSTEM_INSTRUCTION } from '../prompts/system.prompt';
+import { AiModelRouterService, ModelRoute } from '../router/ai-model-router.service';
 
 @Injectable()
 export class GeminiProvider implements AiProvider {
@@ -27,7 +28,10 @@ export class GeminiProvider implements AiProvider {
   private readonly DEFAULT_MAX_INPUT_CHARS = 20000;
   private readonly DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private modelRouter: AiModelRouterService,
+  ) {
     this.initClient();
   }
 
@@ -44,7 +48,7 @@ export class GeminiProvider implements AiProvider {
   }
 
   private getApiKey(): string | null {
-    const apiKey = this.configService.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
+    const apiKey = this.configService?.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
     if (apiKey && apiKey.trim() !== '') {
       return apiKey.trim();
     }
@@ -52,7 +56,7 @@ export class GeminiProvider implements AiProvider {
   }
 
   private getEnvNumber(key: string, fallback: number): number {
-    const configured = this.configService.get<string>(key) || process.env[key];
+    const configured = this.configService?.get<string>(key) || process.env[key];
     if (configured) {
       const parsed = parseInt(configured, 10);
       if (!Number.isNaN(parsed) && parsed > 0) return parsed;
@@ -61,7 +65,7 @@ export class GeminiProvider implements AiProvider {
   }
 
   private getEnvString(key: string): string | null {
-    const value = this.configService.get<string>(key) || process.env[key];
+    const value = this.configService?.get<string>(key) || process.env[key];
     if (value && value.trim() !== '') return value.trim();
     return null;
   }
@@ -72,29 +76,52 @@ export class GeminiProvider implements AiProvider {
 
   getTimeoutForOperation(operation: string): number {
     const baseTimeout = this.getBaseTimeoutMs();
-    if (operation === 'image') {
+    if (operation === 'image' || operation === 'image-generate') {
       return this.getEnvNumber('GEMINI_IMAGE_TIMEOUT_MS', Math.max(baseTimeout, this.DEFAULT_IMAGE_TIMEOUT_MS));
     }
-    if (operation === 'lesson-plan' || operation === 'worksheet' || operation === 'import') {
+    if (
+      operation === 'lesson-plan' ||
+      operation === 'worksheet' ||
+      operation === 'import' ||
+      operation === 'homeroom-summary' ||
+      operation === 'homeroom-weekly-summary' ||
+      operation === 'homeroom-monthly-summary'
+    ) {
       return baseTimeout;
     }
     return Math.min(this.DEFAULT_LIGHT_TIMEOUT_MS, baseTimeout);
   }
 
+  getRouteForOperation(operation: string): ModelRoute {
+    return this.modelRouter.getRouteForOperation(operation);
+  }
+
+  getGemmaModelName(): string {
+    return this.modelRouter.getGemmaModel();
+  }
+
+  getFastModelName(): string {
+    return this.modelRouter.getFastModel();
+  }
+
+  getComplexModelName(): string {
+    return this.modelRouter.getComplexModel();
+  }
+
   getModelName(): string {
-    return this.getEnvString('GEMINI_MODEL') || this.getEnvString('GEMINI_PRIMARY_MODEL') || 'gemini-3.7-flash';
+    return this.modelRouter.getComplexModel();
   }
 
   getFallbackModelName(): string {
-    return this.getEnvString('GEMINI_FALLBACK_MODEL') || 'gemini-3.6-flash';
+    return this.modelRouter.getFastModel();
   }
 
   getImageModelName(): string {
-    return this.getEnvString('GEMINI_IMAGE_MODEL') || 'gemini-3.1-flash-image';
+    return this.modelRouter.getImageModel();
   }
 
   getImageFallbackModelName(): string {
-    return this.getEnvString('GEMINI_IMAGE_FALLBACK_MODEL') || 'gemini-3.1-flash-lite-image';
+    return this.modelRouter.getImageFallbackModel();
   }
 
   private isImagenModel(model: string): boolean {
@@ -252,9 +279,11 @@ export class GeminiProvider implements AiProvider {
 
   private async executeWithModelRetry<T>(
     operation: string,
-    model: string,
+    selectedModel: string,
+    modelUsed: string,
+    fallbackUsed: boolean,
     work: () => Promise<T>,
-    maxRetries: number = 2,
+    maxRetries: number = 1,
   ): Promise<T> {
     let lastError: any;
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -263,7 +292,7 @@ export class GeminiProvider implements AiProvider {
         const result = await work();
         const durationMs = Date.now() - startTime;
         this.logger.log(
-          `[AI] model=${model} attempt=${attempt} upstreamStatus=200 upstreamCode=SUCCESS durationMs=${durationMs}`,
+          `[AI] operation=${operation} selectedModel=${selectedModel} modelUsed=${modelUsed} fallbackUsed=${fallbackUsed} upstreamStatus=200 durationMs=${durationMs}`,
         );
         return result;
       } catch (err: any) {
@@ -271,10 +300,10 @@ export class GeminiProvider implements AiProvider {
         const durationMs = Date.now() - startTime;
         const info = this.categorizeError(err);
         this.logger.warn(
-          `[AI] model=${model} attempt=${attempt} upstreamStatus=${info.status} upstreamCode=${info.code} durationMs=${durationMs}`,
+          `[AI] operation=${operation} selectedModel=${selectedModel} modelUsed=${modelUsed} fallbackUsed=${fallbackUsed} upstreamStatus=${info.status} durationMs=${durationMs}`,
         );
 
-        // Never retry on 429, 400, 404, 401/403, or TIMEOUT
+        // Never retry on 429, 400, 404, 401/403, or TIMEOUT on the same model
         if (
           info.category === 'QUOTA_EXCEEDED' ||
           info.category === 'INVALID_INPUT' ||
@@ -286,10 +315,10 @@ export class GeminiProvider implements AiProvider {
           throw err;
         }
 
-        // Retry 503 or transient upstream error up to maxRetries
+        // Retry 503 or transient overload up to maxRetries with exponential backoff
         if (attempt <= maxRetries) {
           this.logger.log(
-            `[AI] model=${model} 503 backoff retry (${attempt}/${maxRetries})...`,
+            `[AI] operation=${operation} model=${modelUsed} 503 backoff retry (${attempt}/${maxRetries})...`,
           );
           await this.sleepWithBackoff(attempt - 1, 1000);
         }
@@ -367,8 +396,8 @@ export class GeminiProvider implements AiProvider {
     this.assertClientReady(operation);
     this.assertPromptSize(prompt);
 
-    const primaryModel = this.getModelName();
-    const fallbackModel = this.getFallbackModelName();
+    const route = this.modelRouter.getRouteForOperation(operation);
+    const modelsToTry = [route.primaryModel, ...route.fallbackChain];
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation(operation);
 
     const callModel = (model: string) => async (): Promise<T> => {
@@ -402,33 +431,40 @@ export class GeminiProvider implements AiProvider {
     };
 
     let lastError: any;
-    try {
-      return await this.executeWithModelRetry(operation, primaryModel, callModel(primaryModel), 2);
-    } catch (primaryErr: any) {
-      lastError = primaryErr;
-      const info = this.categorizeError(primaryErr);
+    for (let i = 0; i < modelsToTry.length; i++) {
+      const model = modelsToTry[i];
+      const isFallback = model !== route.primaryModel;
 
-      if (
-        info.category === 'INVALID_INPUT' ||
-        info.category === 'AUTH_ERROR' ||
-        info.category === 'QUOTA_EXCEEDED'
-      ) {
-        return this.mapAndThrowError(primaryErr, operation, primaryModel);
-      }
-
-      if (fallbackModel && fallbackModel !== primaryModel) {
-        this.logger.warn(
-          `[AI] operation=${operation} primary model=${primaryModel} failed. Falling back to model=${fallbackModel}`,
+      try {
+        return await this.executeWithModelRetry(
+          operation,
+          route.primaryModel,
+          model,
+          isFallback,
+          callModel(model),
+          1,
         );
-        try {
-          return await this.executeWithModelRetry(operation, fallbackModel, callModel(fallbackModel), 2);
-        } catch (fallbackErr: any) {
-          lastError = fallbackErr;
+      } catch (err: any) {
+        lastError = err;
+        const info = this.categorizeError(err);
+
+        // Do not fallback on client 400 Bad Request
+        if (info.category === 'INVALID_INPUT' || err instanceof BadRequestException) {
+          return this.mapAndThrowError(err, operation, route.primaryModel);
+        }
+
+        // If another model is available in fallback chain, log and continue
+        if (i < modelsToTry.length - 1) {
+          const nextModel = modelsToTry[i + 1];
+          this.logger.warn(
+            `[AI] operation=${operation} model=${model} failed with ${info.code || info.status}. Transitioning to fallback model=${nextModel}`,
+          );
+          continue;
         }
       }
     }
 
-    return this.mapAndThrowError(lastError, operation, primaryModel);
+    return this.mapAndThrowError(lastError, operation, route.primaryModel);
   }
 
   async generateText(options: GenerateTextOptions): Promise<string> {
@@ -436,8 +472,8 @@ export class GeminiProvider implements AiProvider {
     this.assertClientReady(operation);
     this.assertPromptSize(prompt);
 
-    const primaryModel = this.getModelName();
-    const fallbackModel = this.getFallbackModelName();
+    const route = this.modelRouter.getRouteForOperation(operation);
+    const modelsToTry = [route.primaryModel, ...route.fallbackChain];
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation(operation);
 
     const callModel = (model: string) => async (): Promise<string> => {
@@ -460,33 +496,40 @@ export class GeminiProvider implements AiProvider {
     };
 
     let lastError: any;
-    try {
-      return await this.executeWithModelRetry(operation, primaryModel, callModel(primaryModel), 2);
-    } catch (primaryErr: any) {
-      lastError = primaryErr;
-      const info = this.categorizeError(primaryErr);
+    for (let i = 0; i < modelsToTry.length; i++) {
+      const model = modelsToTry[i];
+      const isFallback = model !== route.primaryModel;
 
-      if (
-        info.category === 'INVALID_INPUT' ||
-        info.category === 'AUTH_ERROR' ||
-        info.category === 'QUOTA_EXCEEDED'
-      ) {
-        return this.mapAndThrowError(primaryErr, operation, primaryModel);
-      }
-
-      if (fallbackModel && fallbackModel !== primaryModel) {
-        this.logger.warn(
-          `[AI] operation=${operation} primary model=${primaryModel} failed. Falling back to model=${fallbackModel}`,
+      try {
+        return await this.executeWithModelRetry(
+          operation,
+          route.primaryModel,
+          model,
+          isFallback,
+          callModel(model),
+          1,
         );
-        try {
-          return await this.executeWithModelRetry(operation, fallbackModel, callModel(fallbackModel), 2);
-        } catch (fallbackErr: any) {
-          lastError = fallbackErr;
+      } catch (err: any) {
+        lastError = err;
+        const info = this.categorizeError(err);
+
+        // Do not fallback on client 400 Bad Request
+        if (info.category === 'INVALID_INPUT' || err instanceof BadRequestException) {
+          return this.mapAndThrowError(err, operation, route.primaryModel);
+        }
+
+        // If another model is available in fallback chain, log and continue
+        if (i < modelsToTry.length - 1) {
+          const nextModel = modelsToTry[i + 1];
+          this.logger.warn(
+            `[AI] operation=${operation} model=${model} failed with ${info.code || info.status}. Transitioning to fallback model=${nextModel}`,
+          );
+          continue;
         }
       }
     }
 
-    return this.mapAndThrowError(lastError, operation, primaryModel);
+    return this.mapAndThrowError(lastError, operation, route.primaryModel);
   }
 
   private mapAndThrowError(error: any, operation: string, model: string): never {

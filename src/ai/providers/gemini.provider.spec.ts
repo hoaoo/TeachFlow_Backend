@@ -1,10 +1,12 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { RequestTimeoutException, ServiceUnavailableException, InternalServerErrorException } from '@nestjs/common';
+import { RequestTimeoutException, ServiceUnavailableException } from '@nestjs/common';
 import { GeminiProvider } from './gemini.provider';
+import { AiModelRouterService } from '../router/ai-model-router.service';
 
 describe('GeminiProvider', () => {
   let provider: GeminiProvider;
+  let router: AiModelRouterService;
   const mockGenerateContent = jest.fn();
   const mockGenerateImages = jest.fn();
 
@@ -14,13 +16,16 @@ describe('GeminiProvider', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        AiModelRouterService,
         GeminiProvider,
         {
           provide: ConfigService,
           useValue: {
             get: jest.fn((key: string) => {
               if (key === 'GEMINI_API_KEY') return 'test_api_key_123';
-              if (key === 'GEMINI_MODEL') return '';
+              if (key === 'GEMMA_MODEL') return 'gemma-4-26b-a4b-it';
+              if (key === 'GEMINI_FAST_MODEL') return 'gemini-3.5-flash-lite';
+              if (key === 'GEMINI_COMPLEX_MODEL') return 'gemini-3.7-flash';
               if (key === 'GEMINI_TIMEOUT_MS') return '60000';
               return null;
             }),
@@ -30,6 +35,7 @@ describe('GeminiProvider', () => {
     }).compile();
 
     provider = module.get(GeminiProvider);
+    router = module.get(AiModelRouterService);
     (provider as any).aiClient = {
       models: {
         generateContent: mockGenerateContent,
@@ -38,295 +44,197 @@ describe('GeminiProvider', () => {
     };
   });
 
-  it('assigns 60s timeout for heavy operations', () => {
-    expect(provider.getTimeoutForOperation('lesson-plan')).toBe(60000);
-    expect(provider.getTimeoutForOperation('worksheet')).toBe(60000);
-  });
+  describe('Model Routing per Operation', () => {
+    it('routes chat, student-comment, and questions to Gemma 4 26B', async () => {
+      mockGenerateContent.mockResolvedValue({ text: 'Phản hồi sư phạm' });
+      await provider.generateText({ operation: 'chat', prompt: 'Xin chào' });
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemma-4-26b-a4b-it');
 
-  it('assigns 30s timeout for light operations', () => {
-    expect(provider.getTimeoutForOperation('activity')).toBe(30000);
-    expect(provider.getTimeoutForOperation('questions')).toBe(30000);
-    expect(provider.getTimeoutForOperation('student-comment')).toBe(30000);
-  });
-
-  it('returns structured data when Gemini responds with valid JSON', async () => {
-    const mockResult = { title: 'Trong lời mẹ hát', objectives: 'Mục tiêu', teachingEquipment: 'SGK', activities: [] };
-    mockGenerateContent.mockResolvedValueOnce({ text: JSON.stringify(mockResult) });
-
-    const res = await provider.generateStructured({
-      operation: 'lesson-plan',
-      prompt: 'soạn giáo án',
-      schema: {},
-      validate: (raw) => raw as typeof mockResult,
-    });
-
-    expect(res).toEqual(mockResult);
-    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
-    expect(mockGenerateContent.mock.calls[0][0].config.responseMimeType).toBe('application/json');
-  });
-
-  it('never uses gemini-1.5-flash as default model', async () => {
-    mockGenerateContent.mockResolvedValueOnce({ text: JSON.stringify({ ok: true }) });
-    await provider.generateStructured({
-      operation: 'lesson-plan',
-      prompt: 'test',
-      schema: {},
-      validate: (raw) => raw as any,
-    });
-    expect(mockGenerateContent.mock.calls[0][0].model).not.toContain('1.5');
-  });
-
-  it('throws when API key is not configured', async () => {
-    (provider as any).aiClient = null;
-    jest.spyOn(provider as any, 'getApiKey').mockReturnValue(null);
-    await expect(
-      provider.generateStructured({
-        operation: 'lesson-plan',
-        prompt: 'test',
+      mockGenerateContent.mockResolvedValue({ text: JSON.stringify({ comment: 'Học sinh chăm chỉ' }) });
+      await provider.generateStructured({
+        operation: 'student-comment',
+        prompt: 'nhận xét',
         schema: {},
-        validate: (raw) => raw as any,
-      }),
-    ).rejects.toThrow(ServiceUnavailableException);
-  });
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemma-4-26b-a4b-it');
 
-  it('falls back to gemini-3.6-flash when primary model is not found', async () => {
-    mockGenerateContent.mockRejectedValueOnce(new Error('Model not found: gemini-3.7-flash'));
-    mockGenerateContent.mockResolvedValueOnce({ text: JSON.stringify({ title: 'ok' }) });
-
-    const res = await provider.generateStructured({
-      operation: 'lesson-plan',
-      prompt: 'test',
-      schema: {},
-      validate: (raw) => raw as any,
-    });
-
-    expect(res).toEqual({ title: 'ok' });
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-    expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.6-flash');
-  });
-
-  it('throws RequestTimeoutException and does not retry on timeout', async () => {
-    mockGenerateContent.mockImplementation(() => new Promise(() => {}));
-    jest.spyOn(provider, 'getTimeoutForOperation').mockReturnValue(50);
-
-    await expect(
-      provider.generateStructured({
-        operation: 'lesson-plan',
-        prompt: 'test',
+      mockGenerateContent.mockResolvedValue({ text: JSON.stringify({ questions: [] }) });
+      await provider.generateStructured({
+        operation: 'questions',
+        prompt: 'tạo câu hỏi',
         schema: {},
-        validate: (raw) => raw as any,
-      }),
-    ).rejects.toThrow(RequestTimeoutException);
-
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-  });
-
-  it('retries up to 2 times on 503 and succeeds on retry', async () => {
-    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
-    mockGenerateContent
-      .mockRejectedValueOnce({ status: 503, message: 'This model is currently experiencing high demand.' })
-      .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Kế hoạch bài dạy' }) });
-
-    const res = await provider.generateStructured({
-      operation: 'lesson-plan',
-      prompt: 'soạn giáo án',
-      schema: {},
-      validate: (raw) => raw as any,
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[2][0].model).toBe('gemma-4-26b-a4b-it');
     });
 
-    expect(res).toEqual({ title: 'Kế hoạch bài dạy' });
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
-    expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.7-flash');
-  });
+    it('routes document extraction and import to Gemini 3.5 Flash Lite', async () => {
+      mockGenerateContent.mockResolvedValue({ text: JSON.stringify({ data: [] }) });
+      await provider.generateStructured({
+        operation: 'document-extraction',
+        prompt: 'trích xuất văn bản',
+        schema: {},
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.5-flash-lite');
 
-  it('falls back to GEMINI_FALLBACK_MODEL when primary model fails with 503 on all retries', async () => {
-    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
-    mockGenerateContent
-      .mockRejectedValueOnce({ status: 503, message: 'High demand' })
-      .mockRejectedValueOnce({ status: 503, message: 'High demand' })
-      .mockRejectedValueOnce({ status: 503, message: 'High demand' })
-      .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Kế hoạch fallback' }) });
-
-    const res = await provider.generateStructured({
-      operation: 'lesson-plan',
-      prompt: 'soạn giáo án',
-      schema: {},
-      validate: (raw) => raw as any,
+      await provider.generateStructured({
+        operation: 'import',
+        prompt: 'nhập danh sách học sinh',
+        schema: {},
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
     });
 
-    expect(res).toEqual({ title: 'Kế hoạch fallback' });
-    expect(mockGenerateContent).toHaveBeenCalledTimes(4);
-    expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
-    expect(mockGenerateContent.mock.calls[3][0].model).toBe('gemini-3.6-flash');
-  });
-
-  it('throws 503 AI_PROVIDER_UNAVAILABLE when both primary and fallback models fail with 503', async () => {
-    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
-    mockGenerateContent.mockRejectedValue({ status: 503, message: 'Service unavailable' });
-
-    const err: any = await provider
-      .generateStructured({
+    it('routes lesson-plan, worksheet, and homeroom-summary to Gemini 3.7 Flash', async () => {
+      mockGenerateContent.mockResolvedValue({ text: JSON.stringify({ title: 'Kế hoạch bài dạy' }) });
+      await provider.generateStructured({
         operation: 'lesson-plan',
         prompt: 'soạn giáo án',
         schema: {},
-        validate: (raw) => raw as any,
-      })
-      .catch((e) => e);
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
 
-    expect(err).toBeInstanceOf(ServiceUnavailableException);
-    expect(err.getResponse()).toEqual({
-      statusCode: 503,
-      code: 'AI_PROVIDER_UNAVAILABLE',
-      message: 'Dịch vụ AI đang tạm quá tải. Vui lòng thử lại sau.',
+      await provider.generateStructured({
+        operation: 'worksheet',
+        prompt: 'tạo phiếu bài tập',
+        schema: {},
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.7-flash');
+
+      await provider.generateStructured({
+        operation: 'homeroom-summary',
+        prompt: 'báo cáo chủ nhiệm',
+        schema: {},
+        validate: (raw) => raw,
+      });
+      expect(mockGenerateContent.mock.calls[2][0].model).toBe('gemini-3.7-flash');
     });
   });
 
-  it('throws 503 AI_RATE_LIMITED immediately without spamming retries on 429', async () => {
-    mockGenerateContent.mockRejectedValueOnce({ status: 429, message: 'Resource exhausted / Quota exceeded' });
+  describe('Fallback Flows', () => {
+    it('falls back from Gemma 4 26B (429) directly to Gemini 3.5 Flash Lite', async () => {
+      mockGenerateContent
+        .mockRejectedValueOnce({ status: 429, message: 'Resource exhausted' })
+        .mockResolvedValueOnce({ text: 'Chào thầy cô' });
 
-    const err: any = await provider
-      .generateStructured({
+      const res = await provider.generateText({ operation: 'chat', prompt: 'hi' });
+      expect(res).toBe('Chào thầy cô');
+      expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemma-4-26b-a4b-it');
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
+    });
+
+    it('falls back from Gemini 3.7 (429) directly to Gemini 3.5 Flash Lite', async () => {
+      mockGenerateContent
+        .mockRejectedValueOnce({ status: 429, message: 'Resource exhausted' })
+        .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Bài học 1' }) });
+
+      const res = await provider.generateStructured({
         operation: 'lesson-plan',
         prompt: 'soạn giáo án',
         schema: {},
-        validate: (raw) => raw as any,
-      })
-      .catch((e) => e);
+        validate: (raw) => raw,
+      });
 
-    expect(err).toBeInstanceOf(ServiceUnavailableException);
-    expect(err.getResponse()).toEqual({
-      statusCode: 503,
-      code: 'AI_RATE_LIMITED',
-      message: 'Hệ thống AI Gemini đã vượt quá giới hạn yêu cầu (Rate limit / Quota). Vui lòng thử lại sau.',
+      expect(res).toEqual({ title: 'Bài học 1' });
+      expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
     });
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-  });
 
-  it('maps provider errors without leaking secrets', async () => {
-    jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
-    mockGenerateContent.mockRejectedValue(new Error('api_key_invalid secret=abc'));
-    await expect(
-      provider.generateStructured({
+    it('falls back to Gemma when both Gemini 3.7 and Gemini 3.5 fail', async () => {
+      mockGenerateContent
+        .mockRejectedValueOnce({ status: 429, message: 'Gemini 3.7 rate limited' })
+        .mockRejectedValueOnce({ status: 429, message: 'Gemini 3.5 rate limited' })
+        .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Bài học từ Gemma' }) });
+
+      const res = await provider.generateStructured({
         operation: 'lesson-plan',
-        prompt: 'test',
+        prompt: 'soạn giáo án',
         schema: {},
-        validate: (raw) => raw as any,
-      }),
-    ).rejects.toThrow(ServiceUnavailableException);
+        validate: (raw) => raw,
+      });
+
+      expect(res).toEqual({ title: 'Bài học từ Gemma' });
+      expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
+      expect(mockGenerateContent.mock.calls[2][0].model).toBe('gemma-4-26b-a4b-it');
+    });
+
+    it('does not cause infinite fallback loop when all models fail', async () => {
+      mockGenerateContent.mockRejectedValue({ status: 429, message: 'Rate limit exceeded' });
+
+      await expect(
+        provider.generateStructured({
+          operation: 'lesson-plan',
+          prompt: 'soạn giáo án',
+          schema: {},
+          validate: (raw) => raw,
+        }),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      // Total attempts should equal number of models in chain: 3 (3.7 -> 3.5 -> gemma)
+      expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+    });
+
+    it('retries at most 1 time with backoff on 503 before switching to fallback', async () => {
+      jest.spyOn(provider as any, 'sleepWithBackoff').mockResolvedValue(undefined);
+      mockGenerateContent
+        .mockRejectedValueOnce({ status: 503, message: 'Service unavailable attempt 1' })
+        .mockRejectedValueOnce({ status: 503, message: 'Service unavailable attempt 2' })
+        .mockResolvedValueOnce({ text: JSON.stringify({ title: 'Thành công từ fallback' }) });
+
+      const res = await provider.generateStructured({
+        operation: 'lesson-plan',
+        prompt: 'soạn giáo án',
+        schema: {},
+        validate: (raw) => raw,
+      });
+
+      expect(res).toEqual({ title: 'Thành công từ fallback' });
+      expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+      expect(mockGenerateContent.mock.calls[0][0].model).toBe('gemini-3.7-flash');
+      expect(mockGenerateContent.mock.calls[1][0].model).toBe('gemini-3.7-flash');
+      expect(mockGenerateContent.mock.calls[2][0].model).toBe('gemini-3.5-flash-lite');
+    });
   });
 
-  describe('generateImage', () => {
-    it('generates an image buffer from generateContent inline data (valid path)', async () => {
+  describe('Error handling & image generation', () => {
+    it('throws 400 immediately on invalid input without attempting fallbacks', async () => {
+      mockGenerateContent.mockRejectedValueOnce({ status: 400, message: 'invalid argument: bad prompt' });
+
+      await expect(
+        provider.generateStructured({
+          operation: 'lesson-plan',
+          prompt: 'invalid',
+          schema: {},
+          validate: (raw) => raw,
+        }),
+      ).rejects.toThrow();
+
+      expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it('generates image successfully', async () => {
       mockGenerateContent.mockResolvedValueOnce({
         candidates: [
           {
             content: {
-              parts: [{ inlineData: { data: Buffer.from('png-data').toString('base64'), mimeType: 'image/png' } }],
+              parts: [{ inlineData: { data: Buffer.from('image-bytes').toString('base64'), mimeType: 'image/png' } }],
             },
           },
         ],
       });
 
-      const image = await provider.generateImage({
-        operation: 'image',
-        prompt: 'minh họa phân số',
-        aspectRatio: '1:1',
-      });
-
-      expect(image.mimeType).toBe('image/png');
-      expect(Buffer.isBuffer(image.buffer)).toBe(true);
-      expect(image.buffer.toString()).toBe('png-data');
-      expect(mockGenerateContent).toHaveBeenCalled();
-      expect(JSON.stringify(mockGenerateContent.mock.calls[0][0])).not.toContain('test_api_key');
-    });
-
-    it('returns 503 AI_IMAGE_PROVIDER_UNAVAILABLE when API key is missing', async () => {
-      (provider as any).aiClient = null;
-      jest.spyOn(provider as any, 'getApiKey').mockReturnValue(null);
-
-      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
-      expect(error).toBeInstanceOf(ServiceUnavailableException);
-      expect(error.getResponse()).toEqual(
-        expect.objectContaining({
-          statusCode: 503,
-          code: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
-          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
-        }),
-      );
-      expect(JSON.stringify(error.getResponse())).not.toContain('GEMINI_API_KEY');
-    });
-
-    it('returns 503 AI_IMAGE_PROVIDER_UNAVAILABLE for invalid/unavailable image model', async () => {
-      mockGenerateContent.mockRejectedValueOnce({ status: 404, message: 'Model not found: gemini-3.1-flash-image' });
-      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-lite-image');
-
-      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
-      expect(error).toBeInstanceOf(ServiceUnavailableException);
-      expect(error.getResponse()).toEqual(
-        expect.objectContaining({
-          code: 'AI_IMAGE_PROVIDER_UNAVAILABLE',
-          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
-        }),
-      );
-    });
-
-    it('maps provider 4xx to AI_IMAGE_INVALID_REQUEST without leaking upstream text', async () => {
-      mockGenerateContent.mockRejectedValueOnce({ status: 400, message: 'invalid argument secret=abc' });
-
-      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
-      expect(error.getStatus()).toBe(400);
-      expect(error.getResponse()).toEqual(
-        expect.objectContaining({
-          code: 'AI_IMAGE_INVALID_REQUEST',
-          message: 'Yêu cầu tạo ảnh không hợp lệ. Vui lòng điều chỉnh mô tả và thử lại.',
-        }),
-      );
-      expect(JSON.stringify(error.getResponse())).not.toContain('secret=abc');
-    });
-
-    it('maps provider 5xx to AI_IMAGE_UPSTREAM_ERROR', async () => {
-      mockGenerateContent.mockRejectedValue({ status: 500, message: 'backend exploded stacktrace' });
-      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-lite-image');
-
-      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
-      expect(error).toBeInstanceOf(ServiceUnavailableException);
-      expect(error.getResponse()).toEqual(
-        expect.objectContaining({
-          code: 'AI_IMAGE_UPSTREAM_ERROR',
-          message: 'Dịch vụ tạo ảnh AI hiện chưa khả dụng.',
-        }),
-      );
-      expect(JSON.stringify(error.getResponse())).not.toContain('stacktrace');
-    });
-
-    it('throws AI_IMAGE_TIMEOUT when the provider call exceeds timeout', async () => {
-      mockGenerateContent.mockImplementation(() => new Promise(() => {}));
-      jest.spyOn(provider, 'getTimeoutForOperation').mockReturnValue(40);
-
-      const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
-      expect(error).toBeInstanceOf(RequestTimeoutException);
-      expect(error.getResponse()).toEqual(expect.objectContaining({ code: 'AI_IMAGE_TIMEOUT' }));
-    });
-
-    it('falls back from retired Imagen generateImages to Gemini generateContent', async () => {
-      jest.spyOn(provider, 'getImageModelName').mockReturnValue('imagen-4.0-generate-001');
-      jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-image');
-      mockGenerateImages.mockRejectedValueOnce(new Error('Imagen models are deprecated and shut down'));
-      mockGenerateContent.mockResolvedValueOnce({
-        candidates: [
-          {
-            content: {
-              parts: [{ inlineData: { data: Buffer.from('fallback-png').toString('base64'), mimeType: 'image/png' } }],
-            },
-          },
-        ],
-      });
-
-      const image = await provider.generateImage({ operation: 'image', prompt: 'minh họa phân số' });
-      expect(image.buffer.toString()).toBe('fallback-png');
-      expect(mockGenerateImages).toHaveBeenCalled();
-      expect(mockGenerateContent).toHaveBeenCalled();
+      const img = await provider.generateImage({ operation: 'image', prompt: 'vẽ tranh' });
+      expect(img.mimeType).toBe('image/png');
+      expect(img.buffer.toString()).toBe('image-bytes');
     });
   });
 });

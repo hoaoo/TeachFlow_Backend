@@ -9,12 +9,18 @@ export interface CanvasDeskSeat {
 export interface CanvasDesk {
   id: string;
   name: string;
-  x: number;
-  y: number;
+  x?: number;
+  y?: number;
   width?: number;
   height?: number;
   seatCapacity: number;
   seats: CanvasDeskSeat[];
+}
+
+export interface CanvasGroup {
+  id: string;
+  name: string;
+  desks: CanvasDesk[];
 }
 
 export interface CanvasLayout {
@@ -22,7 +28,8 @@ export interface CanvasLayout {
     width?: number;
     height?: number;
   };
-  desks: CanvasDesk[];
+  groups?: CanvasGroup[];
+  desks?: CanvasDesk[];
 }
 
 export interface SeatingPositionInput {

@@ -106,9 +106,9 @@ export class SeatingPlansService {
     const shuffledStudents = [...students].sort(() => Math.random() - 0.5);
 
     const layoutObj = current.layout as any;
-    if (layoutObj && Array.isArray(layoutObj.desks)) {
+    if (layoutObj && typeof layoutObj === 'object') {
       let studentIndex = 0;
-      const updatedDesks = layoutObj.desks.map((desk: CanvasDesk) => {
+      const assignSeats = (desk: any) => {
         const capacity = Math.max(1, Math.min(4, desk.seatCapacity || 2));
         const newSeats = Array.from({ length: capacity }, (_, pos) => {
           const student = studentIndex < shuffledStudents.length ? shuffledStudents[studentIndex++] : null;
@@ -122,14 +122,28 @@ export class SeatingPlansService {
           seatCapacity: capacity,
           seats: newSeats,
         };
-      });
+      };
+
+      let updatedGroups: any = undefined;
+      let updatedDesks: any = undefined;
+
+      if (Array.isArray(layoutObj.groups)) {
+        updatedGroups = layoutObj.groups.map((group: any) => ({
+          ...group,
+          desks: (group.desks || []).map(assignSeats),
+        }));
+        updatedDesks = updatedGroups.flatMap((g: any) => g.desks || []);
+      } else if (Array.isArray(layoutObj.desks)) {
+        updatedDesks = layoutObj.desks.map(assignSeats);
+      }
 
       const updated = await this.prisma.seatingPlan.update({
         where: { id },
         data: {
           layout: {
             ...layoutObj,
-            desks: updatedDesks,
+            ...(updatedGroups ? { groups: updatedGroups } : {}),
+            ...(updatedDesks ? { desks: updatedDesks } : {}),
           },
         },
       });
@@ -161,17 +175,31 @@ export class SeatingPlansService {
 
     const layoutObj = current.layout as any;
     let nextLayout: any = [];
-    if (layoutObj && Array.isArray(layoutObj.desks)) {
-      nextLayout = {
-        ...layoutObj,
-        desks: layoutObj.desks.map((desk: CanvasDesk) => ({
-          ...desk,
-          seats: Array.from({ length: desk.seatCapacity || 2 }, (_, pos) => ({
-            position: pos,
-            studentId: null,
-          })),
+    if (layoutObj && typeof layoutObj === 'object') {
+      const clearSeats = (desk: any) => ({
+        ...desk,
+        seats: Array.from({ length: desk.seatCapacity || 2 }, (_, pos) => ({
+          position: pos,
+          studentId: null,
         })),
-      };
+      });
+
+      if (Array.isArray(layoutObj.groups)) {
+        const nextGroups = layoutObj.groups.map((group: any) => ({
+          ...group,
+          desks: (group.desks || []).map(clearSeats),
+        }));
+        nextLayout = {
+          ...layoutObj,
+          groups: nextGroups,
+          desks: nextGroups.flatMap((g: any) => g.desks || []),
+        };
+      } else if (Array.isArray(layoutObj.desks)) {
+        nextLayout = {
+          ...layoutObj,
+          desks: layoutObj.desks.map(clearSeats),
+        };
+      }
     }
 
     const updated = await this.prisma.seatingPlan.update({
@@ -235,59 +263,128 @@ export class SeatingPlansService {
     const validStudents = new Set((await this.activeStudents(classroomId)).map((s) => s.id));
     const seatedStudentIds = new Set<string>();
 
-    // 1. Structured Canvas Layout: { canvas?, desks: [...] }
-    if (typeof layout === 'object' && Array.isArray(layout.desks)) {
-      const validatedDesks: CanvasDesk[] = [];
+    // 1. Structured Group/Desk Layout: { canvas?, groups?: [...], desks?: [...] }
+    if (typeof layout === 'object' && (Array.isArray(layout.groups) || Array.isArray(layout.desks))) {
+      const validatedGroups: any[] = [];
+      const allValidatedDesks: CanvasDesk[] = [];
 
-      for (let i = 0; i < layout.desks.length; i++) {
-        const desk = layout.desks[i];
-        if (!desk || typeof desk !== 'object') continue;
+      if (Array.isArray(layout.groups)) {
+        for (let g = 0; g < layout.groups.length; g++) {
+          const group = layout.groups[g];
+          if (!group || typeof group !== 'object') continue;
+          const groupId = group.id || `group-${g + 1}`;
+          const groupName = group.name || `TỔ ${g + 1}`;
+          const desks = Array.isArray(group.desks) ? group.desks : [];
+          const validatedDesks: CanvasDesk[] = [];
 
-        const deskId = desk.id || `desk-${i + 1}`;
-        const deskName = desk.name || `Bàn ${i + 1}`;
-        const x = typeof desk.x === 'number' ? desk.x : 100;
-        const y = typeof desk.y === 'number' ? desk.y : 100;
-        const seatCapacity = Math.max(1, Math.min(4, Number(desk.seatCapacity) || 2));
+          for (let i = 0; i < Math.min(10, desks.length); i++) {
+            const desk = desks[i];
+            if (!desk || typeof desk !== 'object') continue;
+            const deskId = desk.id || `desk-${groupId}-${i + 1}`;
+            const deskName = desk.name || `Bàn ${i + 1}`;
+            const seatCapacity = Math.max(1, Math.min(4, Number(desk.seatCapacity) || 2));
+            const seats = Array.isArray(desk.seats) ? desk.seats : [];
+            const validatedSeats = [];
 
-        const seats = Array.isArray(desk.seats) ? desk.seats : [];
-        const validatedSeats = [];
+            for (let p = 0; p < seatCapacity; p++) {
+              const seat = seats.find((s: any) => s && s.position === p);
+              const studentId = seat?.studentId || null;
 
-        for (let p = 0; p < seatCapacity; p++) {
-          const seat = seats.find((s: any) => s && s.position === p);
-          const studentId = seat?.studentId || null;
+              if (studentId) {
+                if (!validStudents.has(studentId)) {
+                  throw new BadRequestException('INVALID_STUDENT_ENROLLMENT');
+                }
+                if (seatedStudentIds.has(studentId)) {
+                  throw new ConflictException('STUDENT_ALREADY_SEATED');
+                }
+                seatedStudentIds.add(studentId);
+              }
 
-          if (studentId) {
-            if (!validStudents.has(studentId)) {
-              throw new BadRequestException('INVALID_STUDENT_ENROLLMENT');
+              validatedSeats.push({
+                position: p,
+                studentId,
+              });
             }
-            if (seatedStudentIds.has(studentId)) {
-              throw new ConflictException('STUDENT_ALREADY_SEATED');
-            }
-            seatedStudentIds.add(studentId);
+
+            const validatedDesk: CanvasDesk = {
+              id: deskId,
+              name: deskName,
+              x: typeof desk.x === 'number' ? desk.x : 0,
+              y: typeof desk.y === 'number' ? desk.y : 0,
+              width: desk.width || (seatCapacity === 1 ? 110 : seatCapacity === 4 ? 200 : 160),
+              height: desk.height || (seatCapacity === 4 ? 120 : 90),
+              seatCapacity,
+              seats: validatedSeats,
+            };
+            validatedDesks.push(validatedDesk);
+            allValidatedDesks.push(validatedDesk);
           }
 
-          validatedSeats.push({
-            position: p,
-            studentId,
+          validatedGroups.push({
+            id: groupId,
+            name: groupName,
+            desks: validatedDesks,
           });
         }
 
-        validatedDesks.push({
-          id: deskId,
-          name: deskName,
-          x,
-          y,
-          width: desk.width || (seatCapacity === 1 ? 110 : seatCapacity === 4 ? 200 : 160),
-          height: desk.height || (seatCapacity === 4 ? 120 : 90),
-          seatCapacity,
-          seats: validatedSeats,
-        });
+        return {
+          canvas: layout.canvas || { width: 1200, height: 800 },
+          groups: validatedGroups,
+          desks: allValidatedDesks,
+        };
       }
 
-      return {
-        canvas: layout.canvas || { width: 1200, height: 800 },
-        desks: validatedDesks,
-      };
+      if (Array.isArray(layout.desks)) {
+        for (let i = 0; i < layout.desks.length; i++) {
+          const desk = layout.desks[i];
+          if (!desk || typeof desk !== 'object') continue;
+
+          const deskId = desk.id || `desk-${i + 1}`;
+          const deskName = desk.name || `Bàn ${i + 1}`;
+          const x = typeof desk.x === 'number' ? desk.x : 100;
+          const y = typeof desk.y === 'number' ? desk.y : 100;
+          const seatCapacity = Math.max(1, Math.min(4, Number(desk.seatCapacity) || 2));
+
+          const seats = Array.isArray(desk.seats) ? desk.seats : [];
+          const validatedSeats = [];
+
+          for (let p = 0; p < seatCapacity; p++) {
+            const seat = seats.find((s: any) => s && s.position === p);
+            const studentId = seat?.studentId || null;
+
+            if (studentId) {
+              if (!validStudents.has(studentId)) {
+                throw new BadRequestException('INVALID_STUDENT_ENROLLMENT');
+              }
+              if (seatedStudentIds.has(studentId)) {
+                throw new ConflictException('STUDENT_ALREADY_SEATED');
+              }
+              seatedStudentIds.add(studentId);
+            }
+
+            validatedSeats.push({
+              position: p,
+              studentId,
+            });
+          }
+
+          allValidatedDesks.push({
+            id: deskId,
+            name: deskName,
+            x,
+            y,
+            width: desk.width || (seatCapacity === 1 ? 110 : seatCapacity === 4 ? 200 : 160),
+            height: desk.height || (seatCapacity === 4 ? 120 : 90),
+            seatCapacity,
+            seats: validatedSeats,
+          });
+        }
+
+        return {
+          canvas: layout.canvas || { width: 1200, height: 800 },
+          desks: allValidatedDesks,
+        };
+      }
     }
 
     // 2. Legacy Array Layout: [ { studentId, row, column, seatIndex } ]
@@ -360,18 +457,45 @@ export class SeatingPlansService {
     const layout = plan.layout;
     let mappedLayout: any = layout;
 
-    if (layout && typeof layout === 'object' && Array.isArray(layout.desks)) {
-      mappedLayout = {
-        ...layout,
-        desks: layout.desks.map((desk: CanvasDesk) => ({
-          ...desk,
-          seats: (desk.seats || []).map((seat) => ({
-            ...seat,
-            student: seat.studentId ? byId.get(seat.studentId) || null : null,
-            stale: seat.studentId ? !byId.has(seat.studentId) : false,
+    if (layout && typeof layout === 'object') {
+      if (Array.isArray(layout.groups)) {
+        mappedLayout = {
+          ...layout,
+          groups: layout.groups.map((group: any) => ({
+            ...group,
+            desks: (group.desks || []).map((desk: any) => ({
+              ...desk,
+              seats: (desk.seats || []).map((seat: any) => ({
+                ...seat,
+                student: seat.studentId ? byId.get(seat.studentId) || null : null,
+                stale: seat.studentId ? !byId.has(seat.studentId) : false,
+              })),
+            })),
           })),
-        })),
-      };
+          desks: Array.isArray(layout.desks)
+            ? layout.desks.map((desk: CanvasDesk) => ({
+                ...desk,
+                seats: (desk.seats || []).map((seat) => ({
+                  ...seat,
+                  student: seat.studentId ? byId.get(seat.studentId) || null : null,
+                  stale: seat.studentId ? !byId.has(seat.studentId) : false,
+                })),
+              }))
+            : undefined,
+        };
+      } else if (Array.isArray(layout.desks)) {
+        mappedLayout = {
+          ...layout,
+          desks: layout.desks.map((desk: CanvasDesk) => ({
+            ...desk,
+            seats: (desk.seats || []).map((seat) => ({
+              ...seat,
+              student: seat.studentId ? byId.get(seat.studentId) || null : null,
+              stale: seat.studentId ? !byId.has(seat.studentId) : false,
+            })),
+          })),
+        };
+      }
     } else if (Array.isArray(layout)) {
       mappedLayout = layout.map((p: any) => ({
         ...p,
