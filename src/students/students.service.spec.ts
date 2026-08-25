@@ -133,6 +133,7 @@ describe('StudentsService (Production Unit Tests)', () => {
       },
       studentEnrollment: {
         findMany: jest.fn(),
+        findFirst: jest.fn(),
         create: jest.fn(),
         updateMany: jest.fn(),
       },
@@ -534,6 +535,85 @@ describe('StudentsService (Production Unit Tests)', () => {
       expect(mockAudit.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'STUDENT_IMPORT' }),
       );
+    });
+
+    it('rejects duplicate studentCode within the same import batch', async () => {
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce(mockClass1G);
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClass1G]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);
+
+      mockPrisma.student.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.student.count.mockResolvedValueOnce(10);
+      mockPrisma.student.create.mockResolvedValue({ id: 's-new', fullName: 'Học sinh 1' });
+
+      const res = await service.importStudents(
+        {
+          classroomId: 'class-1g',
+          students: [
+            { fullName: 'Học sinh A', studentCode: 'HS_DUP', gender: 'Nam' },
+            { fullName: 'Học sinh B', studentCode: 'HS_DUP', gender: 'Nữ' },
+          ],
+        },
+        'teacher-a',
+      );
+
+      expect(res.importedCount).toBe(1);
+      expect(res.errorCount).toBe(1);
+      expect(res.errors[0].message).toContain('trùng lặp trong tệp import');
+    });
+
+    it('handles existing student in system by enrolling into new classroom instead of duplicating', async () => {
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce(mockClass1A);
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClass1A]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);
+
+      // Student exists in DB with code HS001, but not enrolled in Class 1A
+      mockPrisma.student.findUnique.mockResolvedValueOnce({ id: 'student-1', studentCode: 'HS001', fullName: 'Nguyễn Văn A' });
+      mockPrisma.studentEnrollment.findFirst.mockResolvedValueOnce(null); // not active in class-1a
+      mockPrisma.studentEnrollment.create.mockResolvedValueOnce({ id: 'se-new' });
+
+      const res = await service.importStudents(
+        {
+          classroomId: 'class-1a',
+          students: [{ fullName: 'Nguyễn Văn A', studentCode: 'HS001', gender: 'Nam' }],
+        },
+        'teacher-a',
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.importedCount).toBe(1);
+      expect(mockPrisma.student.create).not.toHaveBeenCalled();
+      expect(mockPrisma.studentEnrollment.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            studentId: 'student-1',
+            classroomId: 'class-1a',
+            status: 'ACTIVE',
+          }),
+        }),
+      );
+    });
+
+    it('skips student if already actively enrolled in the target classroom', async () => {
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce(mockClass1G);
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClass1G]);
+      mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);
+
+      // Student exists and is already active in Class 1G
+      mockPrisma.student.findUnique.mockResolvedValueOnce({ id: 'student-1', studentCode: 'HS001' });
+      mockPrisma.studentEnrollment.findFirst.mockResolvedValueOnce({ id: 'se-1', status: 'ACTIVE' });
+
+      const res = await service.importStudents(
+        {
+          classroomId: 'class-1g',
+          students: [{ fullName: 'Nguyễn Văn A', studentCode: 'HS001' }],
+        },
+        'teacher-a',
+      );
+
+      expect(res.skipped).toBe(1);
+      expect(res.importedCount).toBe(0);
+      expect(res.errors[0].message).toContain('đã được ghi danh trong lớp này');
     });
 
     it('does not import into another teacher classroom', async () => {

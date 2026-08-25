@@ -24,18 +24,16 @@ import {
 } from '../resources/resources.validator';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import {
+  extractDocxTablesAndText,
+  parseDocxStudentTables,
+} from './utils/docx-extractor.util';
+import {
+  validateAndNormalizeStudentRow,
+  ImportStudentPreviewRow,
+} from './utils/student-import-normalizer.util';
 
-export interface ImportStudentPreviewRow {
-  fullName: string;
-  studentCode?: string;
-  gender?: string;
-  dob?: string;
-  parentName?: string;
-  parentPhone?: string;
-  note?: string;
-  valid: boolean;
-  errors: string[];
-}
+export { ImportStudentPreviewRow };
 
 @Injectable()
 export class ImportAiService {
@@ -79,10 +77,34 @@ export class ImportAiService {
   private async analyzeStudents(file: Express.Multer.File, ext: string, dto: AnalyzeImportDto) {
     let rows: ImportStudentPreviewRow[] = [];
 
-    if (ext === '.xlsx' || ext === '.xls' || ext === '.csv') {
+    // 1. Spreadsheet (.xlsx, .xls, .csv) -> Deterministic parsing
+    if (['.xlsx', '.xls', '.csv'].includes(ext)) {
       rows = this.parseSpreadsheetStudents(file.buffer);
     }
 
+    // 2. Word (.docx, .doc) -> Deterministic table extraction first
+    if (rows.length === 0 && (ext === '.docx' || ext === '.doc')) {
+      const docxData = extractDocxTablesAndText(file.buffer);
+      if (docxData.hasTables && docxData.tables.length > 0) {
+        const parsed = parseDocxStudentTables(docxData.tables);
+        if (parsed.rows.length > 0) {
+          rows = parsed.rows.map((row) => validateAndNormalizeStudentRow(row));
+        }
+      }
+
+      // If no table or table empty, extract unstructured text from DOCX paragraphs
+      if (rows.length === 0 && docxData.text.trim()) {
+        const aiResult = await this.provider.generateStructured<ImportStudentsOutputDto>({
+          operation: 'import',
+          prompt: buildImportStudentsPrompt(docxData.text, dto),
+          schema: importStudentsSchema,
+          validate: (raw) => validateAiOutput(ImportStudentsOutputDto, raw),
+        });
+        rows = (aiResult.students || []).map((student) => validateAndNormalizeStudentRow(student));
+      }
+    }
+
+    // 3. Fallback for PDF, Image or unresolved files -> Gemini structured AI extraction
     if (rows.length === 0) {
       const extracted = await this.extractTextOrDescribe(file, ext);
       const aiResult = await this.provider.generateStructured<ImportStudentsOutputDto>({
@@ -92,7 +114,7 @@ export class ImportAiService {
         inlineParts: extracted.inlinePart ? [extracted.inlinePart] : undefined,
         validate: (raw) => validateAiOutput(ImportStudentsOutputDto, raw),
       });
-      rows = (aiResult.students || []).map((student) => this.validateStudentRow(student));
+      rows = (aiResult.students || []).map((student) => validateAndNormalizeStudentRow(student));
     }
 
     const validCount = rows.filter((row) => row.valid).length;
@@ -104,7 +126,7 @@ export class ImportAiService {
       errorCount: rows.length - validCount,
       rows,
       persisted: false,
-      message: 'AI chỉ đề xuất dữ liệu. Giáo viên cần xem trước và xác nhận trước khi lưu.',
+      message: 'AI và công cụ phân tích đã trích xuất danh sách. Giáo viên vui lòng xem trước, chỉnh sửa nếu cần và xác nhận trước khi lưu.',
     };
   }
 
@@ -155,7 +177,7 @@ export class ImportAiService {
 
       return json
         .map((row) => this.mapSpreadsheetRow(row))
-        .map((row) => this.validateStudentRow(row));
+        .map((row) => validateAndNormalizeStudentRow(row));
     } catch {
       throw new BadRequestException('Không thể đọc tệp bảng tính. Vui lòng kiểm tra lại file Excel.');
     }
@@ -168,10 +190,10 @@ export class ImportAiService {
     }
     const values = Object.values(row).map((value) => String(value ?? '').trim());
     return {
-      fullName: normalized.fullname || normalized.hoten || values[0] || '',
-      studentCode: normalized.studentcode || normalized.mahs || normalized.ma || '',
+      fullName: normalized.fullname || normalized.hoten || normalized.hovaten || values[0] || '',
+      studentCode: normalized.studentcode || normalized.mahs || normalized.ma || normalized.mahocsinh || '',
       gender: normalized.gender || normalized.gioitinh || '',
-      dob: normalized.dob || normalized.ngaysinh || '',
+      dob: normalized.dob || normalized.ngaysinh || normalized.dateofbirth || '',
       parentName: normalized.parentname || normalized.phuhuynh || normalized.hotenphuhuynh || '',
       parentPhone: normalized.parentphone || normalized.sodienthoai || normalized.sdt || '',
       note: normalized.note || normalized.ghichu || '',
@@ -187,51 +209,6 @@ export class ImportAiService {
       .replace(/[^a-z0-9]/g, '');
   }
 
-  private validateStudentRow(row: {
-    fullName?: string;
-    studentCode?: string;
-    gender?: string;
-    dob?: string;
-    parentName?: string;
-    parentPhone?: string;
-    note?: string;
-  }): ImportStudentPreviewRow {
-    const errors: string[] = [];
-    const fullName = (row.fullName || '').trim();
-    if (!fullName) errors.push('Thiếu họ và tên');
-
-    let dob = (row.dob || '').trim();
-    if (dob && !this.isLikelyDate(dob)) {
-      errors.push('Ngày sinh không hợp lệ');
-    }
-
-    let gender = (row.gender || '').trim();
-    if (gender) {
-      const g = gender.toLowerCase();
-      if (['nu', 'nữ', 'female', 'f'].includes(g)) gender = 'Nữ';
-      else if (['nam', 'male', 'm'].includes(g)) gender = 'Nam';
-      else if (!['Nam', 'Nữ'].includes(gender)) errors.push('Giới tính không hợp lệ');
-    }
-
-    return {
-      fullName,
-      studentCode: row.studentCode?.trim() || undefined,
-      gender: gender || undefined,
-      dob: dob || undefined,
-      parentName: row.parentName?.trim() || undefined,
-      parentPhone: row.parentPhone?.trim() || undefined,
-      note: row.note?.trim() || undefined,
-      valid: errors.length === 0,
-      errors,
-    };
-  }
-
-  private isLikelyDate(value: string): boolean {
-    if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(value)) return true;
-    if (!Number.isNaN(Date.parse(value))) return true;
-    return false;
-  }
-
   private async extractTextOrDescribe(file: Express.Multer.File, ext: string) {
     const maxChars = this.provider.getMaxInputChars();
     if (['.png', '.jpg', '.jpeg'].includes(ext)) {
@@ -244,15 +221,19 @@ export class ImportAiService {
       };
     }
 
-    if (ext === '.pdf' || ext === '.docx') {
+    if (ext === '.docx' || ext === '.doc') {
+      const docxData = extractDocxTablesAndText(file.buffer);
+      if (docxData.text.trim()) {
+        return { text: docxData.text.slice(0, maxChars), inlinePart: undefined };
+      }
+    }
+
+    if (ext === '.pdf') {
       const text = this.extractUtf8Snippet(file.buffer, maxChars);
       return {
-        text: text || `Tệp ${ext} ${path.basename(file.originalname || 'document')}. Hãy đọc nội dung và trích xuất dữ liệu có cấu trúc.`,
+        text: text || `Tệp PDF ${path.basename(file.originalname || 'document')}. Hãy đọc nội dung và trích xuất dữ liệu có cấu trúc.`,
         inlinePart: {
-          mimeType:
-            ext === '.pdf'
-              ? 'application/pdf'
-              : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          mimeType: 'application/pdf',
           data: file.buffer.toString('base64'),
         },
       };
@@ -272,3 +253,4 @@ export class ImportAiService {
     return text.slice(0, maxChars);
   }
 }
+

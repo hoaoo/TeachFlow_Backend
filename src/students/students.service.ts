@@ -1,5 +1,6 @@
 import {
   Injectable,
+  BadRequestException,
   NotFoundException,
   ForbiddenException,
   ConflictException,
@@ -702,12 +703,17 @@ export class StudentsService {
   async importStudents(dto: ImportStudentsDto, teacherId: string) {
     const { classroomId, students: rows } = dto;
 
+    if (!classroomId) {
+      throw new BadRequestException('Mã lớp học không được để trống');
+    }
+
     const classroom = await this.prisma.classroom.findUnique({
       where: { id: classroomId },
+      include: { schoolYear: true },
     });
 
     if (!classroom || classroom.deletedAt) {
-      throw new NotFoundException('Lớp học không tồn tại');
+      throw new NotFoundException('Lớp học không tồn tại hoặc đã bị xóa');
     }
 
     if (teacherId) {
@@ -717,103 +723,260 @@ export class StudentsService {
       }
     }
 
+    if (!rows || rows.length === 0) {
+      throw new BadRequestException('Danh sách học sinh import không được để trống');
+    }
+
     const errors: Array<{ row: number; fullName?: string; message: string }> = [];
-    const validRows: ImportStudentRowDto[] = [];
+    const validRows: Array<{
+      rowNumber: number;
+      fullName: string;
+      studentCode?: string;
+      gender: 'MALE' | 'FEMALE';
+      dobString?: string;
+      dateOfBirth?: Date;
+      parentName?: string;
+      parentPhone?: string;
+      note?: string;
+    }> = [];
+
     const seenCodesInBatch = new Set<string>();
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNumber = i + 1;
+      const fullName = (row.fullName || '').trim().replace(/\s+/g, ' ');
 
-      if (!row.fullName || !row.fullName.trim()) {
+      if (!fullName) {
         errors.push({ row: rowNumber, message: 'Thiếu họ và tên học sinh' });
         continue;
       }
 
-      if (row.studentCode && row.studentCode.trim()) {
-        const code = row.studentCode.trim();
-        if (seenCodesInBatch.has(code)) {
-          errors.push({ row: rowNumber, fullName: row.fullName, message: `Mã học sinh "${code}" bị trùng lặp trong file import` });
+      let studentCode = row.studentCode ? row.studentCode.trim() : undefined;
+      if (studentCode) {
+        const lowerCode = studentCode.toLowerCase();
+        if (seenCodesInBatch.has(lowerCode)) {
+          errors.push({
+            row: rowNumber,
+            fullName,
+            message: `Mã học sinh "${studentCode}" bị trùng lặp trong tệp import`,
+          });
           continue;
         }
-        seenCodesInBatch.add(code);
+        seenCodesInBatch.add(lowerCode);
+      }
 
-        const existingStudent = await this.prisma.student.findUnique({
-          where: { studentCode: code },
-        });
-        if (existingStudent && !existingStudent.deletedAt) {
-          errors.push({ row: rowNumber, fullName: row.fullName, message: `Mã học sinh "${code}" đã tồn tại trong hệ thống` });
-          continue;
+      // Gender normalization
+      let gender: 'MALE' | 'FEMALE' = 'MALE';
+      if (row.gender) {
+        const g = row.gender.trim().toLowerCase();
+        if (['nu', 'nữ', 'female', 'f', 'gái', 'gai', '0'].includes(g)) {
+          gender = 'FEMALE';
         }
       }
 
-      validRows.push(row);
+      // Date of Birth normalization
+      let dobString = row.dob ? row.dob.trim() : undefined;
+      let dateOfBirth: Date | undefined;
+      if (dobString) {
+        const dmyMatch = dobString.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+        if (dmyMatch) {
+          const day = parseInt(dmyMatch[1], 10);
+          const month = parseInt(dmyMatch[2], 10);
+          const year = parseInt(dmyMatch[3], 10);
+          if (year >= 1990 && year <= new Date().getFullYear() + 2 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            dateOfBirth = new Date(year, month - 1, day);
+            dobString = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+          }
+        } else {
+          const parsed = new Date(dobString);
+          if (!isNaN(parsed.getTime())) {
+            dateOfBirth = parsed;
+          }
+        }
+      }
+
+      validRows.push({
+        rowNumber,
+        fullName,
+        studentCode,
+        gender,
+        dobString,
+        dateOfBirth,
+        parentName: row.parentName ? row.parentName.trim() : undefined,
+        parentPhone: row.parentPhone ? row.parentPhone.trim() : undefined,
+        note: row.note ? row.note.trim() : undefined,
+      });
     }
 
     if (validRows.length === 0) {
       return {
         success: false,
+        total: rows.length,
+        imported: 0,
+        skipped: 0,
+        failed: errors.length,
         importedCount: 0,
         errorCount: errors.length,
         errors,
+        message: 'Không có dòng dữ liệu hợp lệ nào để import',
       };
     }
 
-    let currentStudentCount = await this.prisma.student.count();
+    let importedCount = 0;
+    let skippedCount = 0;
 
     await this.prisma.$transaction(async (tx) => {
+      let currentStudentCount = await tx.student.count();
+
       for (const r of validRows) {
-        currentStudentCount++;
-        const studentCode = r.studentCode?.trim() || `HS${String(currentStudentCount).padStart(4, '0')}`;
-        const initials = r.fullName
-          .trim()
-          .split(' ')
-          .map((p) => p[0])
-          .slice(-2)
-          .join('')
-          .toUpperCase();
+        let existingStudent: any = null;
 
-        const student = await tx.student.create({
-          data: {
-            fullName: r.fullName.trim(),
-            studentCode,
-            initials,
-            gender: r.gender === 'Nữ' || r.gender === 'FEMALE' ? 'FEMALE' : 'MALE',
-            dobString: r.dob || 'Chưa cập nhật',
-            parentName: r.parentName || 'Chưa cập nhật',
-            parentPhone: r.parentPhone || 'Chưa cập nhật',
-            status: 'GOOD',
-          },
-        });
-
-        await tx.studentEnrollment.create({
-          data: {
-            studentId: student.id,
-            schoolYearId: classroom.schoolYearId,
-            classroomId,
-            status: 'ACTIVE',
-            enrolledAt: new Date(),
-            note: r.note,
-          },
-        });
-
-        await tx.classStudent.create({
-          data: {
-            classroomId,
-            studentId: student.id,
-            status: 'ACTIVE',
-          },
-        });
-
-        if (r.note && r.note.trim()) {
-          await tx.studentComment.create({
-            data: {
-              studentId: student.id,
-              teacherId,
+        if (r.studentCode) {
+          existingStudent = await tx.student.findUnique({
+            where: { studentCode: r.studentCode },
+          });
+        } else {
+          // If no studentCode, check if student with exact fullName + dobString is already in this class
+          const duplicateInClass = await tx.studentEnrollment.findFirst({
+            where: {
               classroomId,
-              content: r.note.trim(),
+              status: 'ACTIVE',
+              student: {
+                fullName: r.fullName,
+                dobString: r.dobString || undefined,
+                deletedAt: null,
+              },
             },
           });
+
+          if (duplicateInClass) {
+            skippedCount++;
+            errors.push({
+              row: r.rowNumber,
+              fullName: r.fullName,
+              message: `Học sinh "${r.fullName}" đã có trong lớp học này (bỏ qua)`,
+            });
+            continue;
+          }
+        }
+
+        if (existingStudent && !existingStudent.deletedAt) {
+          // Check if already active in this classroom
+          const activeEnrollment = await tx.studentEnrollment.findFirst({
+            where: {
+              studentId: existingStudent.id,
+              classroomId,
+              status: 'ACTIVE',
+            },
+          });
+
+          if (activeEnrollment) {
+            skippedCount++;
+            errors.push({
+              row: r.rowNumber,
+              fullName: r.fullName,
+              message: `Học sinh mã "${r.studentCode}" đã được ghi danh trong lớp này`,
+            });
+            continue;
+          }
+
+          // Enroll existing student into this class
+          await tx.studentEnrollment.create({
+            data: {
+              studentId: existingStudent.id,
+              schoolYearId: classroom.schoolYearId,
+              classroomId,
+              status: 'ACTIVE',
+              enrolledAt: new Date(),
+              note: r.note,
+            },
+          });
+
+          await tx.classStudent.upsert({
+            where: {
+              classroomId_studentId: {
+                classroomId,
+                studentId: existingStudent.id,
+              },
+            },
+            update: { status: 'ACTIVE', leftAt: null },
+            create: {
+              classroomId,
+              studentId: existingStudent.id,
+              status: 'ACTIVE',
+            },
+          });
+
+          if (r.note && teacherId) {
+            await tx.studentComment.create({
+              data: {
+                studentId: existingStudent.id,
+                teacherId,
+                classroomId,
+                content: r.note,
+              },
+            });
+          }
+
+          importedCount++;
+        } else {
+          // Create new student
+          currentStudentCount++;
+          const finalCode = r.studentCode || `HS${String(currentStudentCount).padStart(4, '0')}`;
+          const initials = r.fullName
+            .split(' ')
+            .map((p) => p[0])
+            .slice(-2)
+            .join('')
+            .toUpperCase() || 'HS';
+
+          const newStudent = await tx.student.create({
+            data: {
+              fullName: r.fullName,
+              studentCode: finalCode,
+              initials,
+              gender: r.gender,
+              dobString: r.dobString || 'Chưa cập nhật',
+              dateOfBirth: r.dateOfBirth,
+              parentName: r.parentName || 'Chưa cập nhật',
+              parentPhone: r.parentPhone || 'Chưa cập nhật',
+              status: 'GOOD',
+              avatarColor: 'bg-teal-100 text-teal-700',
+            },
+          });
+
+          await tx.studentEnrollment.create({
+            data: {
+              studentId: newStudent.id,
+              schoolYearId: classroom.schoolYearId,
+              classroomId,
+              status: 'ACTIVE',
+              enrolledAt: new Date(),
+              note: r.note,
+            },
+          });
+
+          await tx.classStudent.create({
+            data: {
+              classroomId,
+              studentId: newStudent.id,
+              status: 'ACTIVE',
+            },
+          });
+
+          if (r.note && teacherId) {
+            await tx.studentComment.create({
+              data: {
+                studentId: newStudent.id,
+                teacherId,
+                classroomId,
+                content: r.note,
+              },
+            });
+          }
+
+          importedCount++;
         }
       }
     });
@@ -823,15 +986,24 @@ export class StudentsService {
       action: 'STUDENT_IMPORT',
       resourceType: 'Classroom',
       resourceId: classroomId,
-      details: { importedCount: validRows.length, errorCount: errors.length },
+      details: {
+        totalRows: rows.length,
+        importedCount,
+        skippedCount,
+        errorCount: errors.length,
+      },
     });
 
     return {
-      success: true,
-      importedCount: validRows.length,
+      success: importedCount > 0,
+      total: rows.length,
+      imported: importedCount,
+      skipped: skippedCount,
+      failed: errors.length,
+      importedCount,
       errorCount: errors.length,
       errors,
-      message: `Đã import thành công ${validRows.length} học sinh vào lớp ${classroom.name}`,
+      message: `Đã import thành công ${importedCount}/${rows.length} học sinh vào lớp ${classroom.name}`,
     };
   }
   async getProfile(id: string, teacherId: string) {

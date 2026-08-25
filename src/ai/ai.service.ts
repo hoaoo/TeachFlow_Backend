@@ -88,6 +88,8 @@ export class AiService {
 
   async chat(dto: AiChatDto, file: Express.Multer.File | undefined, user: AuthenticatedUser) {
     const teacherName = user?.teacherName || 'thầy/cô';
+    const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     let fileContext = '';
     let inlinePart: { mimeType: string; data: string } | undefined;
 
@@ -153,9 +155,20 @@ export class AiService {
       inlineParts: inlinePart ? [inlinePart] : undefined,
     });
 
+    const route = this.provider.getRouteForOperation('chat');
+    this.logger.log(
+      `[AI Chat] requestId=${requestId} messageId=${messageId} providerResultReceived=true controllerResponseSent=true contentLength=${responseText?.length || 0}`,
+    );
+
     return {
+      messageId,
+      content: responseText,
+      reply: responseText,
       text: responseText,
       response: responseText,
+      provider: 'google',
+      modelUsed: route.primaryModel,
+      fallbackUsed: false,
       generatedAt: new Date().toISOString(),
       fileName: file?.originalname,
     };
