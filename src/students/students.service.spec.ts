@@ -305,6 +305,7 @@ describe('StudentsService (Production Unit Tests)', () => {
       expect(mockPrisma.classroom.findMany).toHaveBeenCalledWith({
         where: {
           deletedAt: null,
+          isActive: true,
           OR: [
             { teacherId: 'teacher-a' },
             { homeroomTeacherId: 'teacher-a' },

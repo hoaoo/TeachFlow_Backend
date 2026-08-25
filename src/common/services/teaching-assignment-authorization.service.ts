@@ -18,6 +18,7 @@ export class TeachingAssignmentAuthorizationService {
   buildTeacherClassroomScope(teacherId: string) {
     return {
       deletedAt: null,
+      isActive: true,
       OR: [
         { teacherId },
         { homeroomTeacherId: teacherId },
@@ -46,7 +47,7 @@ export class TeachingAssignmentAuthorizationService {
       include: { teachingAssignments: { where: { teacherId, isActive: true } } },
     });
 
-    if (!classroom || classroom.deletedAt) {
+    if (!classroom || classroom.deletedAt || classroom.isActive === false) {
       throw new NotFoundException(`Không tìm thấy lớp học với mã ${classroomId}`);
     }
 
@@ -256,7 +257,7 @@ export class TeachingAssignmentAuthorizationService {
       include: { teachingAssignments: { where: { teacherId, isActive: true } } },
     });
 
-    if (!classroom || classroom.deletedAt) {
+    if (!classroom || classroom.deletedAt || classroom.isActive === false) {
       throw new NotFoundException(`Không tìm thấy lớp học với mã ${classroomId}`);
     }
 

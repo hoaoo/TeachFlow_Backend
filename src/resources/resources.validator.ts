@@ -50,6 +50,7 @@ export const MIME_TYPE_MAP: Record<string, string[]> = {
     'application/zip',
   ],
   '.xls': ['application/vnd.ms-excel'],
+  '.csv': ['text/csv', 'application/csv'],
   '.xlsx': [
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/zip',
@@ -71,7 +72,7 @@ export function determineResourceType(ext: string): string {
   return 'DOCUMENT';
 }
 
-export const IMPORT_ALLOWED_EXTENSIONS = ['.docx', '.pdf', '.xlsx', '.xls', '.png', '.jpg', '.jpeg'];
+export const IMPORT_ALLOWED_EXTENSIONS = ['.docx', '.pdf', '.xlsx', '.xls', '.csv', '.png', '.jpg', '.jpeg'];
 
 export function detectMimeFromMagicBytes(buffer?: Buffer | null): string | null {
   if (!buffer || buffer.length < 4) return null;

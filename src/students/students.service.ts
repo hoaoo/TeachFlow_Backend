@@ -94,6 +94,7 @@ export class StudentsService {
     const enrollmentCondition: any = {
       status: 'ACTIVE',
       classroom: {
+        isActive: true,
         deletedAt: null,
       },
     };

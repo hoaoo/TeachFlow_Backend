@@ -79,7 +79,7 @@ export class ImportAiService {
   private async analyzeStudents(file: Express.Multer.File, ext: string, dto: AnalyzeImportDto) {
     let rows: ImportStudentPreviewRow[] = [];
 
-    if (ext === '.xlsx' || ext === '.xls') {
+    if (ext === '.xlsx' || ext === '.xls' || ext === '.csv') {
       rows = this.parseSpreadsheetStudents(file.buffer);
     }
 
@@ -155,7 +155,6 @@ export class ImportAiService {
 
       return json
         .map((row) => this.mapSpreadsheetRow(row))
-        .filter((row) => row.fullName.trim() !== '')
         .map((row) => this.validateStudentRow(row));
     } catch {
       throw new BadRequestException('Không thể đọc tệp bảng tính. Vui lòng kiểm tra lại file Excel.');
