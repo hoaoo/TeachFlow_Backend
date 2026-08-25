@@ -94,7 +94,6 @@ export class StudentsService {
     const enrollmentCondition: any = {
       status: 'ACTIVE',
       classroom: {
-        isActive: true,
         deletedAt: null,
       },
     };
@@ -111,9 +110,30 @@ export class StudentsService {
       enrollmentCondition.classroom.schoolYearId = schoolYearId;
     }
 
+    const classStudentCondition: any = {
+      status: 'ACTIVE',
+      classroom: {
+        deletedAt: null,
+      },
+    };
+    if (targetClassIds.length > 0) {
+      classStudentCondition.classroomId = { in: targetClassIds };
+    }
+    if (gradeId && gradeId !== 'ALL' && gradeId !== 'Tất cả') {
+      classStudentCondition.classroom.gradeId = gradeId;
+    }
+    if (schoolYearId && schoolYearId !== 'ALL' && schoolYearId !== 'Tất cả') {
+      classStudentCondition.classroom.schoolYearId = schoolYearId;
+    }
+
     const andConditions: any[] = [
       { deletedAt: null },
-      { studentEnrollments: { some: enrollmentCondition } },
+      {
+        OR: [
+          { studentEnrollments: { some: enrollmentCondition } },
+          { classStudents: { some: classStudentCondition } },
+        ],
+      },
     ];
 
     // Status filter
@@ -151,6 +171,8 @@ export class StudentsService {
       orderBy = { fullName: 'desc' };
     } else if (sort === 'updatedAt') {
       orderBy = { updatedAt: 'desc' };
+    } else if (sort === 'nameAsc') {
+      orderBy = { fullName: 'asc' };
     }
 
     const [totalItems, students, allScopeStudents] = await Promise.all([
@@ -169,13 +191,21 @@ export class StudentsService {
             include: { classroom: { include: { grade: true, schoolYear: true } } },
             orderBy: { enrolledAt: 'desc' },
           },
+          classStudents: {
+            where: {
+              status: 'ACTIVE',
+              classroom: { deletedAt: null },
+              ...(targetClassIds.length > 0 ? { classroomId: { in: targetClassIds } } : {}),
+            },
+            include: { classroom: { include: { grade: true, schoolYear: true } } },
+          },
           comments: {
             orderBy: { commentDate: 'desc' },
             take: 1,
           },
           studentAttendances: {
             where: {
-              attendanceSession: { classroomId: { in: targetClassIds } },
+              ...(targetClassIds.length > 0 ? { attendanceSession: { classroomId: { in: targetClassIds } } } : {}),
             },
             select: { status: true },
           },
@@ -190,7 +220,7 @@ export class StudentsService {
           status: true,
           studentAttendances: {
             where: {
-              attendanceSession: { classroomId: { in: targetClassIds } },
+              ...(targetClassIds.length > 0 ? { attendanceSession: { classroomId: { in: targetClassIds } } } : {}),
             },
             select: { status: true },
           },
@@ -286,10 +316,14 @@ export class StudentsService {
     // rows outside the canonical enrollment table.
     if (teacherId) {
       const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
-      const hasAccess = (student.studentEnrollments || []).some(
-        (enrollment: any) =>
-          enrollment.status === 'ACTIVE' && accessibleClassIds.includes(enrollment.classroomId),
-      );
+      const hasAccess =
+        (student.studentEnrollments || []).some(
+          (enrollment: any) =>
+            enrollment.status === 'ACTIVE' && accessibleClassIds.includes(enrollment.classroomId),
+        ) ||
+        (student.classStudents || []).some(
+          (cs: any) => cs.status === 'ACTIVE' && accessibleClassIds.includes(cs.classroomId),
+        );
 
       if (!hasAccess) {
         throw new ForbiddenException('Bạn không có quyền truy cập thông tin học sinh này');

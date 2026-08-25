@@ -15,21 +15,41 @@ export class TeachingAssignmentAuthorizationService {
   constructor(private prisma: PrismaService) {}
 
   /** Canonical classroom visibility scope for teacher-scoped modules. */
-  buildTeacherClassroomScope(teacherId: string) {
+  buildTeacherClassroomScope(teacherId: string, validTeacherIds?: string[]) {
+    const ids = validTeacherIds && validTeacherIds.length > 0 ? validTeacherIds : [teacherId];
     return {
       deletedAt: null,
-      isActive: true,
       OR: [
-        { teacherId },
-        { homeroomTeacherId: teacherId },
-        { teachingAssignments: { some: { teacherId, isActive: true } } },
+        { teacherId: { in: ids } },
+        { homeroomTeacherId: { in: ids } },
+        { teachingAssignments: { some: { teacherId: { in: ids }, isActive: true } } },
       ],
     };
   }
 
   async getAccessibleClassroomIds(teacherId: string): Promise<string[]> {
+    if (!teacherId) return [];
+
+    let validTeacherIds = [teacherId];
+    try {
+      const teacherRecords = this.prisma.teacher?.findMany
+        ? await this.prisma.teacher.findMany({
+            where: {
+              OR: [
+                { id: teacherId },
+                { userId: teacherId },
+              ],
+            },
+            select: { id: true },
+          })
+        : [];
+      validTeacherIds = Array.from(new Set<string>([teacherId, ...teacherRecords.map((t) => t.id)]));
+    } catch {
+      validTeacherIds = [teacherId];
+    }
+
     const classrooms = await this.prisma.classroom.findMany({
-      where: this.buildTeacherClassroomScope(teacherId),
+      where: this.buildTeacherClassroomScope(teacherId, validTeacherIds),
       select: { id: true },
     });
     return (classrooms ?? []).map(({ id }) => id);

@@ -32,6 +32,7 @@ import { GenerateStudentCommentDto } from './dto/generate-student-comment.dto';
 import { GenerateImageDto } from './dto/generate-image.dto';
 import { AnalyzeImportDto } from './dto/analyze-import.dto';
 import { GenerateHomeroomSummaryDto } from './dto/generate-homeroom-summary.dto';
+import { AiChatDto } from './dto/ai-chat.dto';
 
 @ApiTags('AI Assistant')
 @ApiBearerAuth('JWT-auth')
@@ -39,6 +40,24 @@ import { GenerateHomeroomSummaryDto } from './dto/generate-homeroom-summary.dto'
 @Controller('ai')
 export class AiController {
   constructor(private readonly aiService: AiService) {}
+
+  @Post('chat')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Trợ lý AI trả lời câu hỏi tự do và phân tích tệp đính kèm' })
+  @ApiConsumes('multipart/form-data', 'application/json')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 25 * 1024 * 1024 },
+    }),
+  )
+  async chat(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() dto: AiChatDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.aiService.chat(dto, file, user);
+  }
 
   @Post('lesson-plan')
   @HttpCode(HttpStatus.OK)

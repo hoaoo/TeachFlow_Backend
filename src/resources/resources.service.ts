@@ -52,11 +52,8 @@ export class ResourcesService {
     user: AuthenticatedUser,
   ) {
     const teacherId = await this.getTeacherId(user);
-    const maxSizeMb =
-      parseInt(this.configService.get<string>('RESOURCE_MAX_FILE_SIZE_MB') || '25', 10) || 25;
-
-    // Validate file
-    const validation = validateUploadedFile(file, maxSizeMb);
+    // Validate file with type-specific size limit from config
+    const validation = validateUploadedFile(file, undefined, undefined, this.configService);
 
     // Save physical file to storage
     const stored = await this.storageService.saveFile(file, validation.extension);

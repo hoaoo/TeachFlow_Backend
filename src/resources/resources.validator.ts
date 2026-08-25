@@ -94,26 +94,44 @@ export function detectMimeFromMagicBytes(buffer?: Buffer | null): string | null 
   return null;
 }
 
+export function getResourceMaxSizeMb(resourceType: string, configService?: any): number {
+  const getVal = (key: string, fallback: number): number => {
+    const val = configService?.get ? configService.get(key) : process.env[key];
+    if (val) {
+      const parsed = parseInt(val, 10);
+      if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return fallback;
+  };
+
+  switch (resourceType) {
+    case 'IMAGE':
+      return getVal('RESOURCE_MAX_IMAGE_MB', 20);
+    case 'DOCUMENT':
+      return getVal('RESOURCE_MAX_DOC_MB', 50);
+    case 'SPREADSHEET':
+      return getVal('RESOURCE_MAX_SHEET_MB', 50);
+    case 'PRESENTATION':
+      return getVal('RESOURCE_MAX_PPT_MB', 100);
+    case 'VIDEO':
+      return getVal('RESOURCE_MAX_VIDEO_MB', 500);
+    default:
+      return getVal('RESOURCE_MAX_FILE_SIZE_MB', 50);
+  }
+}
+
 export function validateUploadedFile(
   file: Express.Multer.File,
-  maxSizeMb = 25,
+  maxSizeMb?: number,
   allowedExtensions: string[] = ALLOWED_EXTENSIONS,
+  configService?: any,
 ): { extension: string; resourceType: string; sanitizedOriginalName: string } {
   if (!file) {
     throw new BadRequestException('Vui lòng chọn tập tin tải lên');
   }
 
-  // 1. Check file size
-  const maxBytes = maxSizeMb * 1024 * 1024;
-  if (file.size > maxBytes) {
-    throw new PayloadTooLargeException(
-      `Dung lượng tập tin (${(file.size / (1024 * 1024)).toFixed(1)}MB) vượt quá giới hạn cho phép (${maxSizeMb}MB)`,
-    );
-  }
-
-  // 2. Sanitize original filename and extract extension
+  // 1. Sanitize original filename and extract extension
   const rawName = file.originalname || 'uploaded_file';
-  // Strip path traversal characters
   const baseName = path.basename(rawName);
   const ext = path.extname(baseName).toLowerCase();
 
@@ -121,19 +139,30 @@ export function validateUploadedFile(
     throw new BadRequestException('Tập tin không có phần mở rộng hợp lệ');
   }
 
-  // 3. Reject dangerous extensions
+  // 2. Reject dangerous extensions
   if (DANGEROUS_EXTENSIONS.includes(ext)) {
     throw new BadRequestException(
       `Định dạng tập tin (${ext}) có nguy cơ bảo mật và không được phép tải lên hệ thống`,
     );
   }
 
-  // 4. Check against allowlist
+  // 3. Check against allowlist
   if (!allowedExtensions.includes(ext)) {
     throw new BadRequestException(
       `Định dạng tập tin (${ext}) không được hỗ trợ. Hệ thống chỉ hỗ trợ ${allowedExtensions
         .map((item) => item.replace('.', '').toUpperCase())
         .join(', ')}`,
+    );
+  }
+
+  const resourceType = determineResourceType(ext);
+  const effectiveMaxSizeMb = maxSizeMb ?? getResourceMaxSizeMb(resourceType, configService);
+
+  // 4. Check file size according to type
+  const maxBytes = effectiveMaxSizeMb * 1024 * 1024;
+  if (file.size > maxBytes) {
+    throw new PayloadTooLargeException(
+      `Dung lượng tập tin (${(file.size / (1024 * 1024)).toFixed(1)}MB) vượt quá giới hạn cho phép (${effectiveMaxSizeMb}MB)`,
     );
   }
 
@@ -168,7 +197,6 @@ export function validateUploadedFile(
 
   // Clean original filename for display
   const sanitizedOriginalName = baseName.replace(/[\/\\?%*:|"<>]/g, '_').slice(0, 120);
-  const resourceType = determineResourceType(ext);
 
   return {
     extension: ext,
