@@ -239,6 +239,7 @@ export class GeminiProvider implements AiProvider {
     this.assertPromptSize(prompt);
 
     const modelToUse = this.getModelName();
+    const fallbackModel = this.getFallbackModelName();
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation(operation);
     const startTime = Date.now();
 
@@ -272,60 +273,59 @@ export class GeminiProvider implements AiProvider {
       return validate(parsed);
     };
 
+    let lastError: any;
     try {
       const result = await runCall(modelToUse);
       this.logger.log(
         `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
       );
       return result;
-    } catch (error: any) {
-      const errorCategory = this.categorizeError(error);
-      this.logger.error(
-        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory}`,
+    } catch (primaryError: any) {
+      lastError = primaryError;
+      const errorCategory = this.categorizeError(primaryError);
+      const upstreamStatus =
+        primaryError?.status ||
+        primaryError?.statusCode ||
+        (String(primaryError?.message || '').includes('503') ? 503 : undefined);
+
+      this.logger.warn(
+        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory} upstreamStatus=${upstreamStatus || 'unknown'}`,
       );
 
-      const fallbackModel = this.getFallbackModelName();
-      if (modelToUse !== fallbackModel && errorCategory === 'MODEL_NOT_FOUND') {
-        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to ${fallbackModel}`);
+      if (errorCategory === 'TIMEOUT' || primaryError instanceof RequestTimeoutException) {
+        return this.mapAndThrowError(primaryError, operation);
+      }
+
+      if (fallbackModel && fallbackModel !== modelToUse && errorCategory !== 'INVALID_INPUT') {
+        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to model=${fallbackModel}`);
         try {
+          const fallbackStartTime = Date.now();
           const fallbackResult = await runCall(fallbackModel);
           this.logger.log(
-            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
+            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - fallbackStartTime} status=SUCCESS`,
           );
           return fallbackResult;
         } catch (fallbackError: any) {
+          lastError = fallbackError;
           const fallbackCategory = this.categorizeError(fallbackError);
+          const fallbackStatus = fallbackError?.status || fallbackError?.statusCode;
           this.logger.error(
-            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${fallbackCategory}`,
+            `[AI] operation=${operation} model=${fallbackModel} status=FAILED errorCategory=${fallbackCategory} upstreamStatus=${fallbackStatus || 'unknown'}`,
           );
         }
       }
-
-      if (errorCategory === 'TIMEOUT' || error instanceof RequestTimeoutException) {
-        throw error;
-      }
-      if (errorCategory === 'INVALID_INPUT' && error instanceof BadRequestException) {
-        throw error;
-      }
-
-      if (
-        retryCount > 0 &&
-        errorCategory !== 'AUTH_ERROR' &&
-        errorCategory !== 'QUOTA_EXCEEDED' &&
-        errorCategory !== 'MODEL_NOT_FOUND'
-      ) {
-        this.logger.warn(`[AI] operation=${operation} retrying generation (${retryCount} attempt left)...`);
-        return this.generateStructured({ ...options, retryCount: retryCount - 1 });
-      }
-
-      if (errorCategory === 'PARSE_ERROR') {
-        throw new InternalServerErrorException(
-          'AI trả về dữ liệu không đúng định dạng. Vui lòng thử lại.',
-        );
-      }
-
-      throw new InternalServerErrorException('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
     }
+
+    if (
+      retryCount > 0 &&
+      this.categorizeError(lastError) !== 'AUTH_ERROR' &&
+      this.categorizeError(lastError) !== 'INVALID_INPUT'
+    ) {
+      this.logger.warn(`[AI] operation=${operation} retrying generation (${retryCount} attempt left)...`);
+      return this.generateStructured({ ...options, retryCount: retryCount - 1 });
+    }
+
+    return this.mapAndThrowError(lastError, operation);
   }
 
   async generateText(options: GenerateTextOptions): Promise<string> {
@@ -335,6 +335,7 @@ export class GeminiProvider implements AiProvider {
     this.assertPromptSize(prompt);
 
     const modelToUse = this.getModelName();
+    const fallbackModel = this.getFallbackModelName();
     const timeoutMs = options.timeoutMs ?? this.getTimeoutForOperation(operation);
     const startTime = Date.now();
 
@@ -357,43 +358,90 @@ export class GeminiProvider implements AiProvider {
       return rawText;
     };
 
+    let lastError: any;
     try {
       const result = await runCall(modelToUse);
       this.logger.log(
         `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
       );
       return result;
-    } catch (error: any) {
-      const errorCategory = this.categorizeError(error);
-      this.logger.error(
-        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory}`,
+    } catch (primaryError: any) {
+      lastError = primaryError;
+      const errorCategory = this.categorizeError(primaryError);
+      const upstreamStatus =
+        primaryError?.status ||
+        primaryError?.statusCode ||
+        (String(primaryError?.message || '').includes('503') ? 503 : undefined);
+
+      this.logger.warn(
+        `[AI] operation=${operation} model=${modelToUse} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${errorCategory} upstreamStatus=${upstreamStatus || 'unknown'}`,
       );
 
-      const fallbackModel = this.getFallbackModelName();
-      if (modelToUse !== fallbackModel && errorCategory === 'MODEL_NOT_FOUND') {
-        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to ${fallbackModel}`);
+      if (errorCategory === 'TIMEOUT' || primaryError instanceof RequestTimeoutException) {
+        return this.mapAndThrowError(primaryError, operation);
+      }
+
+      if (fallbackModel && fallbackModel !== modelToUse && errorCategory !== 'INVALID_INPUT') {
+        this.logger.warn(`[AI] operation=${operation} model=${modelToUse} falling back to model=${fallbackModel}`);
         try {
+          const fallbackStartTime = Date.now();
           const fallbackResult = await runCall(fallbackModel);
           this.logger.log(
-            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=SUCCESS`,
+            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - fallbackStartTime} status=SUCCESS`,
           );
           return fallbackResult;
         } catch (fallbackError: any) {
+          lastError = fallbackError;
           const fallbackCategory = this.categorizeError(fallbackError);
+          const fallbackStatus = fallbackError?.status || fallbackError?.statusCode;
           this.logger.error(
-            `[AI] operation=${operation} model=${fallbackModel} elapsedMs=${Date.now() - startTime} status=FAILED errorCategory=${fallbackCategory}`,
+            `[AI] operation=${operation} model=${fallbackModel} status=FAILED errorCategory=${fallbackCategory} upstreamStatus=${fallbackStatus || 'unknown'}`,
           );
         }
       }
-
-      if (errorCategory === 'TIMEOUT' || error instanceof RequestTimeoutException) {
-        throw error;
-      }
-      if (retryCount > 0 && errorCategory !== 'AUTH_ERROR' && errorCategory !== 'QUOTA_EXCEEDED' && errorCategory !== 'MODEL_NOT_FOUND') {
-        return this.generateText({ ...options, retryCount: retryCount - 1 });
-      }
-      throw new InternalServerErrorException('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
     }
+
+    if (
+      retryCount > 0 &&
+      this.categorizeError(lastError) !== 'AUTH_ERROR' &&
+      this.categorizeError(lastError) !== 'INVALID_INPUT'
+    ) {
+      return this.generateText({ ...options, retryCount: retryCount - 1 });
+    }
+
+    return this.mapAndThrowError(lastError, operation);
+  }
+
+  private mapAndThrowError(error: any, operation: string): never {
+    const category = this.categorizeError(error);
+    if (category === 'TIMEOUT' || error instanceof RequestTimeoutException) {
+      throw error instanceof RequestTimeoutException
+        ? error
+        : new RequestTimeoutException(`Yêu cầu AI (${operation}) vượt quá thời gian cho phép. Vui lòng thử lại.`);
+    }
+    if (category === 'INVALID_INPUT' || error instanceof BadRequestException) {
+      throw error instanceof BadRequestException
+        ? error
+        : new BadRequestException('Yêu cầu không hợp lệ. Vui lòng kiểm tra lại nội dung.');
+    }
+    if (category === 'AUTH_ERROR') {
+      throw new ServiceUnavailableException('Khóa API Gemini chưa hợp lệ hoặc chưa được cấp quyền.');
+    }
+    if (category === 'QUOTA_EXCEEDED') {
+      throw new ServiceUnavailableException(
+        'Hệ thống AI Gemini tạm thời quá tải hoặc hết hạn mức. Vui lòng thử lại sau giây lát.',
+      );
+    }
+    if (category === 'MODEL_NOT_FOUND') {
+      throw new ServiceUnavailableException('Mô hình AI hiện không khả dụng. Vui lòng thử lại sau.');
+    }
+    if (category === 'SERVICE_UNAVAILABLE') {
+      throw new ServiceUnavailableException('Dịch vụ AI Gemini hiện đang quá tải tạm thời. Vui lòng thử lại sau.');
+    }
+    if (category === 'PARSE_ERROR') {
+      throw new ServiceUnavailableException('AI trả về dữ liệu không đúng định dạng. Vui lòng thử lại.');
+    }
+    throw new ServiceUnavailableException('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
   }
 
   async generateImage(options: GenerateImageOptions): Promise<GeneratedImage> {
@@ -589,9 +637,7 @@ export class GeminiProvider implements AiProvider {
       const shouldFallback =
         fallbackModel &&
         fallbackModel !== model &&
-        (this.isImagenModel(model) ||
-          category === 'MODEL_NOT_FOUND' ||
-          category === 'PARSE_ERROR');
+        category !== 'INVALID_INPUT';
 
       if (shouldFallback) {
         this.logger.warn(

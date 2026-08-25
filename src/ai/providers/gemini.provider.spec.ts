@@ -122,7 +122,7 @@ describe('GeminiProvider', () => {
   });
 
   it('rejects empty AI response', async () => {
-    mockGenerateContent.mockResolvedValueOnce({ text: '   ' });
+    mockGenerateContent.mockResolvedValue({ text: '   ' });
     await expect(
       provider.generateStructured({
         operation: 'lesson-plan',
@@ -131,7 +131,7 @@ describe('GeminiProvider', () => {
         validate: (raw) => raw as any,
         retryCount: 0,
       }),
-    ).rejects.toThrow(InternalServerErrorException);
+    ).rejects.toThrow(ServiceUnavailableException);
   });
 
   it('rejects malformed JSON', async () => {
@@ -144,7 +144,7 @@ describe('GeminiProvider', () => {
         validate: (raw) => raw as any,
         retryCount: 0,
       }),
-    ).rejects.toThrow(InternalServerErrorException);
+    ).rejects.toThrow(ServiceUnavailableException);
   });
 
   it('retries once when validator rejects the payload', async () => {
@@ -168,7 +168,7 @@ describe('GeminiProvider', () => {
   });
 
   it('maps provider errors without leaking secrets', async () => {
-    mockGenerateContent.mockRejectedValueOnce(new Error('api_key_invalid secret=abc'));
+    mockGenerateContent.mockRejectedValue(new Error('api_key_invalid secret=abc'));
     await expect(
       provider.generateStructured({
         operation: 'lesson-plan',
@@ -177,7 +177,7 @@ describe('GeminiProvider', () => {
         validate: (raw) => raw as any,
         retryCount: 0,
       }),
-    ).rejects.toThrow('Không thể tạo nội dung lúc này. Vui lòng thử lại.');
+    ).rejects.toThrow(ServiceUnavailableException);
   });
 
   describe('generateImage', () => {
@@ -250,7 +250,7 @@ describe('GeminiProvider', () => {
     });
 
     it('maps provider 5xx to AI_IMAGE_UPSTREAM_ERROR', async () => {
-      mockGenerateContent.mockRejectedValueOnce({ status: 500, message: 'backend exploded stacktrace' });
+      mockGenerateContent.mockRejectedValue({ status: 500, message: 'backend exploded stacktrace' });
       jest.spyOn(provider, 'getImageFallbackModelName').mockReturnValue('gemini-3.1-flash-lite-image');
 
       const error: any = await provider.generateImage({ operation: 'image', prompt: 'minh họa' }).catch((e) => e);
