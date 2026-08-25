@@ -7,6 +7,11 @@ export class AssignWorksheetDto {
   @IsNotEmpty()
   classroomId: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  note?: string;
+
   @ApiPropertyOptional({ example: '2026-09-15T23:59:59+07:00' })
   @IsOptional()
   @IsDateString()

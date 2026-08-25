@@ -1,5 +1,6 @@
 import {
   Injectable,
+  BadRequestException,
   NotFoundException,
   ForbiddenException,
   ConflictException,
@@ -8,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorksheetDto } from './dto/create-worksheet.dto';
 import { UpdateWorksheetDto } from './dto/update-worksheet.dto';
 import { AssignWorksheetDto } from './dto/assign-worksheet.dto';
+import { UpdateWorksheetAssignmentDto } from './dto/update-worksheet-assignment.dto';
 import { WorksheetQuestionInputDto } from './dto/worksheet-question.dto';
 import { worksheetToRenderModel, WorksheetRenderModel } from '../export/render-models';
 
@@ -247,6 +249,7 @@ export class WorksheetsService {
           classroomId: classroom.id,
           teacherId,
           dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
+          note: dto.note?.trim() || null,
         },
         include: {
           classroom: { select: { id: true, name: true, code: true } },
@@ -267,6 +270,49 @@ export class WorksheetsService {
       }
       throw error;
     }
+  }
+
+  async updateAssignment(id: string, dto: UpdateWorksheetAssignmentDto, teacherId: string) {
+    const existing = await this.getOwnedAssignment(id, teacherId);
+    if (existing.status === 'CANCELLED') throw new BadRequestException('WORKSHEET_ASSIGNMENT_CANCELLED');
+    const updated = await this.prisma.worksheetAssignment.update({
+      where: { id },
+      data: {
+        dueAt: dto.dueAt === undefined ? undefined : dto.dueAt === null ? null : new Date(dto.dueAt),
+        note: dto.note === undefined ? undefined : dto.note?.trim() || null,
+      },
+      include: { classroom: { select: { id: true, name: true, code: true } } },
+    });
+    return this.mapAssignment(updated);
+  }
+
+  async cancelAssignment(id: string, teacherId: string) {
+    await this.getOwnedAssignment(id, teacherId);
+    const updated = await this.prisma.worksheetAssignment.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+      include: { classroom: { select: { id: true, name: true, code: true } } },
+    });
+    return this.mapAssignment(updated);
+  }
+
+  private async getOwnedAssignment(id: string, teacherId: string) {
+    const assignment = await this.prisma.worksheetAssignment.findUnique({ where: { id } });
+    if (!assignment) throw new NotFoundException('WORKSHEET_ASSIGNMENT_NOT_FOUND');
+    if (assignment.teacherId !== teacherId) throw new ForbiddenException('Bạn không có quyền truy cập assignment này');
+    return assignment;
+  }
+
+  private mapAssignment(assignment: any) {
+    return {
+      id: assignment.id,
+      worksheetId: assignment.worksheetId,
+      classroom: assignment.classroom,
+      assignedAt: assignment.assignedAt,
+      dueAt: assignment.dueAt,
+      note: assignment.note || null,
+      status: assignment.status,
+    };
   }
 
   async getAssignments(id: string, teacherId: string) {

@@ -31,6 +31,8 @@ import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { SchedulesModule } from './schedules/schedules.module';
 import { HealthModule } from './health/health.module';
+import { SeatingPlansModule } from './seating-plans/seating-plans.module';
+import { TemplatesModule } from './templates/templates.module';
 import { CommonModule } from './common/common.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -50,6 +52,8 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     PrismaModule,
     CommonModule,
     HealthModule,
+    SeatingPlansModule,
+    TemplatesModule,
     AuthModule,
     UsersModule,
     TeachersModule,

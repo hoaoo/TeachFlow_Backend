@@ -12,6 +12,7 @@ import { WorksheetsService } from './worksheets.service';
 import { CreateWorksheetDto } from './dto/create-worksheet.dto';
 import { UpdateWorksheetDto } from './dto/update-worksheet.dto';
 import { AssignWorksheetDto } from './dto/assign-worksheet.dto';
+import { UpdateWorksheetAssignmentDto } from './dto/update-worksheet-assignment.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Worksheets')
@@ -52,6 +53,16 @@ export class WorksheetsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.worksheetsService.assign(id, dto, user.teacherId);
+  }
+
+  @Patch(':id/assignments/:assignmentId')
+  async updateAssignment(@Param('assignmentId') assignmentId: string, @Body() dto: UpdateWorksheetAssignmentDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.worksheetsService.updateAssignment(assignmentId, dto, user.teacherId);
+  }
+
+  @Delete(':id/assignments/:assignmentId')
+  async cancelAssignment(@Param('assignmentId') assignmentId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.worksheetsService.cancelAssignment(assignmentId, user.teacherId);
   }
 
   @Get(':id/assignments')

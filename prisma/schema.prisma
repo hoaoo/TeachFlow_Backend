@@ -146,6 +146,8 @@ model Teacher {
   teachingActivities     TeachingActivity[]
   worksheets             Worksheet[]
   worksheetAssignments   WorksheetAssignment[]
+  seatingPlans           SeatingPlan[]
+  teacherTemplates       TeacherTemplate[]
   attendanceSessions     AttendanceSession[]
   assessments            Assessment[]
   studentComments        StudentComment[]
@@ -239,21 +241,21 @@ model Subject {
 }
 
 model Classroom {
-  id           String    @id @default(uuid())
-  code         String
-  name         String
-  gradeId      String
-  schoolYearId String
-  teacherId    String
+  id                String    @id @default(uuid())
+  code              String
+  name              String
+  gradeId           String
+  schoolYearId      String
+  teacherId         String
   homeroomTeacherId String?
-  room         String?
-  schedule     String?
-  accent       String?   @default("teal")
-  status       String    @default("ACTIVE")
-  isActive     Boolean   @default(true)
-  deletedAt    DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  room              String?
+  schedule          String?
+  accent            String?   @default("teal")
+  status            String    @default("ACTIVE")
+  isActive          Boolean   @default(true)
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   grade                  Grade                   @relation(fields: [gradeId], references: [id])
   schoolYear             SchoolYear              @relation(fields: [schoolYearId], references: [id])
@@ -268,6 +270,7 @@ model Classroom {
   studentComments        StudentComment[]
   worksheets             Worksheet[]
   worksheetAssignments   WorksheetAssignment[]
+  seatingPlans           SeatingPlan[]
   studentBehaviorRecords StudentBehaviorRecord[]
   weeklyClassReviews     WeeklyClassReview[]
   monthlyClassReviews    MonthlyClassReview[]
@@ -618,25 +621,26 @@ model Worksheet {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  teacher   Teacher             @relation(fields: [teacherId], references: [id])
-  subject   Subject?            @relation(fields: [subjectId], references: [id])
-  grade     Grade?              @relation(fields: [gradeId], references: [id])
-  lesson    Lesson?             @relation(fields: [lessonId], references: [id])
-  classroom Classroom?          @relation(fields: [classroomId], references: [id])
-  questions WorksheetQuestion[]
+  teacher     Teacher               @relation(fields: [teacherId], references: [id])
+  subject     Subject?              @relation(fields: [subjectId], references: [id])
+  grade       Grade?                @relation(fields: [gradeId], references: [id])
+  lesson      Lesson?               @relation(fields: [lessonId], references: [id])
+  classroom   Classroom?            @relation(fields: [classroomId], references: [id])
+  questions   WorksheetQuestion[]
   assignments WorksheetAssignment[]
 }
 
 model WorksheetAssignment {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   worksheetId String
   classroomId String
   teacherId   String
-  assignedAt  DateTime @default(now())
+  assignedAt  DateTime  @default(now())
   dueAt       DateTime?
-  status      String   @default("ASSIGNED")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  note        String?
+  status      String    @default("ASSIGNED")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   worksheet Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
   classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
@@ -645,6 +649,39 @@ model WorksheetAssignment {
   @@unique([worksheetId, classroomId])
   @@index([teacherId, classroomId])
   @@index([teacherId, assignedAt])
+}
+
+model SeatingPlan {
+  id          String   @id @default(uuid())
+  teacherId   String
+  classroomId String
+  name        String
+  rows        Int
+  columns     Int
+  layout      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teacher   Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, classroomId, name])
+  @@index([teacherId, classroomId])
+}
+
+model TeacherTemplate {
+  id          String   @id @default(uuid())
+  teacherId   String
+  type        String
+  name        String
+  description String?
+  content     Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([teacherId, type, updatedAt])
 }
 
 model WorksheetQuestion {
@@ -686,12 +723,11 @@ model AttendanceSession {
   teachingAssignment TeachingAssignment? @relation(fields: [teachingAssignmentId], references: [id], onDelete: SetNull)
   attendances        StudentAttendance[]
 
+  @@unique([classroomId, attendanceDate, sessionPeriod])
   @@index([scheduleId])
   @@index([classroomId, attendanceDate])
   @@index([teacherId, attendanceDate])
   @@index([teachingAssignmentId])
-
-  @@unique([classroomId, attendanceDate, sessionPeriod])
 }
 
 model StudentAttendance {

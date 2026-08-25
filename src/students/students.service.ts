@@ -757,6 +757,105 @@ export class StudentsService {
       message: `Đã import thành công ${validRows.length} học sinh vào lớp ${classroom.name}`,
     };
   }
+  async getProfile(id: string, teacherId: string) {
+    const student = await this.findOne(id, teacherId);
+    const classroomIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);
+    const activeEnrollment = await this.prisma.studentEnrollment.findFirst({
+      where: { studentId: id, status: 'ACTIVE', classroomId: { in: classroomIds } },
+      include: { classroom: { include: { grade: true, schoolYear: true } }, schoolYear: true },
+      orderBy: { enrolledAt: 'desc' },
+    });
+
+    const [
+      attendanceRows, recentAttendance, assessmentRows, recentAssessments,
+      commentsCount, recentComments, behaviorsCount, recentBehaviors, assignments,
+    ] = await Promise.all([
+      this.prisma.studentAttendance.findMany({
+        where: { studentId: id, attendanceSession: { teacherId, classroomId: { in: classroomIds } } },
+        select: { status: true },
+      }),
+      this.prisma.studentAttendance.findMany({
+        where: { studentId: id, attendanceSession: { teacherId, classroomId: { in: classroomIds } } },
+        include: { attendanceSession: { include: { schedule: { include: { subject: true } } } } },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+      this.prisma.studentAssessment.findMany({
+        where: { studentId: id, assessment: { teacherId, classroomId: { in: classroomIds }, deletedAt: null } },
+        include: { assessment: { include: { subject: true, classroom: true } }, criterion: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.studentAssessment.findMany({
+        where: { studentId: id, assessment: { teacherId, classroomId: { in: classroomIds }, deletedAt: null } },
+        include: { assessment: { include: { subject: true, classroom: true } }, criterion: true },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+      this.prisma.studentComment.count({ where: { studentId: id, teacherId, classroomId: { in: classroomIds } } }),
+      this.prisma.studentComment.findMany({
+        where: { studentId: id, teacherId, classroomId: { in: classroomIds } },
+        include: { classroom: true, subject: true },
+        orderBy: { commentDate: 'desc' },
+        take: 5,
+      }),
+      this.prisma.studentBehaviorRecord.count({ where: { studentId: id, teacherId, classroomId: { in: classroomIds } } }),
+      this.prisma.studentBehaviorRecord.findMany({
+        where: { studentId: id, teacherId, classroomId: { in: classroomIds } },
+        include: { classroom: true },
+        orderBy: { recordDate: 'desc' },
+        take: 5,
+      }),
+      this.prisma.worksheetAssignment.findMany({
+        where: {
+          teacherId,
+          classroomId: { in: classroomIds },
+          status: { not: 'CANCELLED' },
+          classroom: { studentEnrollments: { some: { studentId: id, status: 'ACTIVE' } } },
+        },
+        include: {
+          worksheet: { select: { id: true, title: true, status: true } },
+          classroom: { select: { id: true, name: true, code: true } },
+        },
+        orderBy: { assignedAt: 'desc' },
+      }),
+    ]);
+
+    const presentCount = attendanceRows.filter((row: any) => row.status === 'PRESENT' || row.status === 'LATE').length;
+    const absentCount = attendanceRows.filter((row: any) => row.status === 'EXCUSED_ABSENCE' || row.status === 'UNEXCUSED_ABSENCE').length;
+    const lateCount = attendanceRows.filter((row: any) => row.status === 'LATE').length;
+    const scored = assessmentRows.filter((row: any) => typeof row.score === 'number');
+    const avgScore = scored.length
+      ? Number((scored.reduce((sum: number, row: any) => sum + row.score, 0) / scored.length).toFixed(1))
+      : null;
+
+    return {
+      student,
+      currentEnrollment: activeEnrollment ? {
+        id: activeEnrollment.id,
+        status: activeEnrollment.status,
+        classroom: activeEnrollment.classroom,
+        schoolYear: activeEnrollment.schoolYear,
+      } : null,
+      stats: {
+        attendanceRate: attendanceRows.length ? Math.round((presentCount / attendanceRows.length) * 100) : null,
+        totalSessions: attendanceRows.length,
+        absences: absentCount,
+        lates: lateCount,
+        avgScore,
+        assessmentsCount: assessmentRows.length,
+        commentsCount,
+        behaviorsCount,
+        assignmentsCount: assignments.length,
+      },
+      recent: {
+        attendance: recentAttendance,
+        assessments: recentAssessments,
+        comments: recentComments,
+        behaviors: recentBehaviors,
+        assignments,
+      },
+    };
+  }
 
   async getOverview(id: string, teacherId: string) {
     const student = await this.findOne(id, teacherId);

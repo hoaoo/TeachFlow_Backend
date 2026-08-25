@@ -31,6 +31,7 @@ import { GenerateQuestionsDto } from './dto/generate-questions.dto';
 import { GenerateStudentCommentDto } from './dto/generate-student-comment.dto';
 import { GenerateImageDto } from './dto/generate-image.dto';
 import { AnalyzeImportDto } from './dto/analyze-import.dto';
+import { GenerateHomeroomSummaryDto } from './dto/generate-homeroom-summary.dto';
 
 @ApiTags('AI Assistant')
 @ApiBearerAuth('JWT-auth')
@@ -87,6 +88,12 @@ export class AiController {
   @ApiTooManyRequestsResponse({ description: 'Vượt quá giới hạn 20 yêu cầu/phút' })
   async generateQuestions(@Body() dto: GenerateQuestionsDto) {
     return this.aiService.generateQuestions(dto);
+  }
+
+  @Post('homeroom-summary')
+  @HttpCode(HttpStatus.OK)
+  async generateHomeroomSummary(@Body() dto: GenerateHomeroomSummaryDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.aiService.generateHomeroomSummary(dto, user);
   }
 
   @Post('student-comment')

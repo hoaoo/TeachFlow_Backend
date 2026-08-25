@@ -9,6 +9,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { StudentCommentsService } from './student-comments.service';
 import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
+import { BatchCreateCommentsDto } from './dto/batch-create-comments.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Comments')
@@ -16,6 +17,12 @@ import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-use
 @Controller()
 export class StudentCommentsController {
   constructor(private studentCommentsService: StudentCommentsService) {}
+
+  @Post('classrooms/:classroomId/comments/batch')
+  async createBatch(@Param('classroomId') classroomId: string, @Body() dto: BatchCreateCommentsDto, @CurrentUser() user: AuthenticatedUser) {
+    dto.classroomId = classroomId;
+    return this.studentCommentsService.createBatch(dto, user.teacherId);
+  }
 
   @Post('students/:studentId/comments')
   @ApiOperation({ summary: 'Thêm nhận xét cho học sinh' })

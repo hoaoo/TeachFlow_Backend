@@ -87,6 +87,12 @@ export class StudentsController {
     return this.studentsService.transferStudent(id, dto, user.teacherId);
   }
 
+  @Get(':id/profile')
+  @ApiOperation({ summary: 'Student 360 profile' })
+  async getProfile(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.studentsService.getProfile(id, user.teacherId);
+  }
+
   @Get(':id/overview')
   @ApiOperation({ summary: 'Lấy tổng quan tiến độ và chỉ số học sinh' })
   async getOverview(

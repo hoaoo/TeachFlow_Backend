@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
+import { BatchCreateCommentsDto } from './dto/batch-create-comments.dto';
 
 @Injectable()
 export class StudentCommentsService {
@@ -65,6 +66,50 @@ export class StudentCommentsService {
       date: new Date(comment.commentDate).toLocaleDateString('vi-VN'),
       teacherName: comment.teacher?.fullName || 'Giáo viên',
     };
+  }
+
+  async createBatch(dto: BatchCreateCommentsDto, teacherId: string) {
+    if (!teacherId) throw new ForbiddenException('TEACHER_NOT_FOUND');
+    const classroom = await this.prisma.classroom.findFirst({
+      where: {
+        id: dto.classroomId,
+        isActive: true,
+        deletedAt: null,
+        OR: [
+          { teacherId },
+          { homeroomTeacherId: teacherId },
+          { teachingAssignments: { some: { teacherId, isActive: true } } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!classroom) throw new ForbiddenException('CLASSROOM_NOT_FOUND');
+
+    const ids = [...new Set(dto.studentIds)];
+    const enrollments = await this.prisma.studentEnrollment.findMany({
+      where: { classroomId: dto.classroomId, studentId: { in: ids }, status: 'ACTIVE', student: { deletedAt: null } },
+      select: { studentId: true },
+    });
+    const validIds = new Set(enrollments.map((enrollment) => enrollment.studentId));
+    if (validIds.size !== ids.length) throw new ForbiddenException('INVALID_STUDENT_ENROLLMENT');
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const rows = [];
+      for (const studentId of ids) {
+        rows.push(await tx.studentComment.create({
+          data: {
+            studentId,
+            teacherId,
+            classroomId: dto.classroomId,
+            subjectId: dto.subjectId,
+            content: dto.content.trim(),
+            commentDate: dto.commentDate ? new Date(dto.commentDate) : undefined,
+          },
+        }));
+      }
+      return rows;
+    });
+    return { success: true, count: created.length, comments: created };
   }
 
   async update(id: string, dto: UpdateCommentDto, teacherId: string) {

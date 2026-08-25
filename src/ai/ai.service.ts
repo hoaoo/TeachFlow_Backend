@@ -10,6 +10,7 @@ import { GenerateQuestionsDto } from './dto/generate-questions.dto';
 import { GenerateStudentCommentDto } from './dto/generate-student-comment.dto';
 import { GenerateImageDto } from './dto/generate-image.dto';
 import { AnalyzeImportDto } from './dto/analyze-import.dto';
+import { GenerateHomeroomSummaryDto } from './dto/generate-homeroom-summary.dto';
 import {
   GeneratedActivityStandaloneOutputDto,
   GeneratedQuestionsOutputDto,
@@ -19,6 +20,7 @@ import {
 import { activitySchema } from './schemas/activity.schema';
 import { questionsSchema } from './schemas/questions.schema';
 import { studentCommentSchema } from './schemas/student-comment.schema';
+import { homeroomSummarySchema } from './schemas/homeroom-summary.schema';
 
 import { buildActivityPrompt } from './prompts/activity.prompt';
 import { buildQuestionsPrompt } from './prompts/questions.prompt';
@@ -78,6 +80,34 @@ export class AiService {
       prompt,
       schema: questionsSchema,
       validate: (raw) => validateAiOutput(GeneratedQuestionsOutputDto, raw),
+    });
+  }
+
+  async generateHomeroomSummary(dto: GenerateHomeroomSummaryDto, user: AuthenticatedUser) {
+    if (!user.teacherId) throw new ForbiddenException('TEACHER_NOT_FOUND');
+    await this.classroomAccess.assertTeacherCanAccessClassroom(dto.classroomId, user.teacherId);
+    const [studentCount, attendanceCount, behaviorCount, assessmentCount] = await Promise.all([
+      this.prisma.studentEnrollment.count({ where: { classroomId: dto.classroomId, status: 'ACTIVE', student: { deletedAt: null } } }),
+      this.prisma.attendanceSession.count({ where: { classroomId: dto.classroomId, teacherId: user.teacherId } }),
+      this.prisma.studentBehaviorRecord.count({ where: { classroomId: dto.classroomId, teacherId: user.teacherId } }),
+      this.prisma.assessment.count({ where: { classroomId: dto.classroomId, teacherId: user.teacherId, deletedAt: null } }),
+    ]);
+    const prompt = [
+      'Tạo bản nháp tổng hợp lớp tiểu học bằng tiếng Việt, không nêu tên học sinh.',
+      `Kỳ: ${dto.period}; Sĩ số active: ${studentCount}; buổi điểm danh: ${attendanceCount}; ghi nhận nề nếp: ${behaviorCount}; bài đánh giá: ${assessmentCount}.`,
+      'Chỉ đề xuất để giáo viên duyệt, không tự ghi cơ sở dữ liệu.',
+    ].join('\n');
+    return this.provider.generateStructured({
+      operation: 'homeroom-summary',
+      prompt,
+      schema: homeroomSummarySchema,
+      validate: (raw) => {
+        const value: any = raw;
+        if (!value || typeof value.summary !== 'string' || !Array.isArray(value.strengths) || !Array.isArray(value.concerns) || !Array.isArray(value.nextSteps)) {
+          throw new Error('INVALID_AI_HOMEROOM_SUMMARY');
+        }
+        return value;
+      },
     });
   }
 

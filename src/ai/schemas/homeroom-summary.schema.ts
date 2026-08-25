@@ -1,0 +1,2 @@
+import { Type, Schema } from '@google/genai';
+export const homeroomSummarySchema: Schema = { type: Type.OBJECT, properties: { summary: { type: Type.STRING }, strengths: { type: Type.ARRAY, items: { type: Type.STRING } }, concerns: { type: Type.ARRAY, items: { type: Type.STRING } }, nextSteps: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ['summary', 'strengths', 'concerns', 'nextSteps'] };
