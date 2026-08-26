@@ -4,9 +4,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
 
+import { PushNotificationService } from './push-notification.service';
+
 describe('NotificationsService (Mobile Deep-link & Reminders)', () => {
   let service: NotificationsService;
   let prisma: PrismaService;
+  let pushService: PushNotificationService;
+
+  const mockPushNotificationService = {
+    sendPushToUser: jest.fn().mockResolvedValue(undefined),
+    sendPushToUsers: jest.fn().mockResolvedValue(undefined),
+  };
 
   const mockPrismaService = {
     teacher: {
@@ -44,11 +52,13 @@ describe('NotificationsService (Mobile Deep-link & Reminders)', () => {
       providers: [
         NotificationsService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: PushNotificationService, useValue: mockPushNotificationService },
       ],
     }).compile();
 
     service = module.get<NotificationsService>(NotificationsService);
     prisma = module.get<PrismaService>(PrismaService);
+    pushService = module.get<PushNotificationService>(PushNotificationService);
     jest.clearAllMocks();
   });
 

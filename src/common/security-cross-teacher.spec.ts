@@ -8,6 +8,7 @@ import { LessonPlansService } from '../lesson-plans/lesson-plans.service';
 import { WorksheetsService } from '../worksheets/worksheets.service';
 import { ResourcesService } from '../resources/resources.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PushNotificationService } from '../notifications/push-notification.service';
 import { HomeroomService } from '../homeroom/homeroom.service';
 import { HomeroomExportService } from '../export/homeroom-export.service';
 import { ReportsService } from '../reports/reports.service';
@@ -115,6 +116,13 @@ describe('Cross-Teacher IDOR Absolute Data Isolation Test Suite', () => {
         WorksheetsService,
         ResourcesService,
         NotificationsService,
+        {
+          provide: PushNotificationService,
+          useValue: {
+            sendPushToUser: jest.fn().mockResolvedValue(undefined),
+            sendPushToUsers: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         HomeroomService,
         {
           provide: HomeroomExportService,

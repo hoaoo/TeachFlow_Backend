@@ -5,6 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PushNotificationService } from './push-notification.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { NotificationType } from '@prisma/client';
@@ -40,7 +41,10 @@ export interface MobileNotificationPayload {
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pushNotificationService: PushNotificationService,
+  ) {}
 
   /**
    * Parse domain deep link and target metadata for mobile native navigation
@@ -155,11 +159,16 @@ export class NotificationsService {
         },
       });
 
-      this.logger.log(
-        `[NOTIFICATION_CREATED] id=${notification.id} userId=${targetUserId} type=${notification.type} title="${notification.title}"`,
-      );
+      const formatted = this.formatNotification(notification);
 
-      return this.formatNotification(notification);
+      // Asynchronously dispatch push notification to user's registered devices (non-blocking)
+      this.pushNotificationService
+        .sendPushToUser(targetUserId, formatted)
+        .catch((err) => {
+          this.logger.warn(`Push dispatch error for notification ${notification.id}: ${err?.message}`);
+        });
+
+      return formatted;
     } catch (err: any) {
       this.logger.warn(`Failed to create notification: ${err?.message}`);
       return null;

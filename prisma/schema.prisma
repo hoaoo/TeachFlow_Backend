@@ -105,6 +105,12 @@ enum ParentContactMethod {
   OTHER
 }
 
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
 enum NotificationType {
   ASSIGNMENT
   ENROLLMENT
@@ -126,6 +132,7 @@ model User {
 
   teacher       Teacher?
   notifications Notification[]
+  pushDevices   PushDevice[]
 }
 
 model Teacher {
@@ -927,6 +934,25 @@ model Notification {
 
   @@index([userId, isRead])
   @@index([userId, createdAt])
+}
+
+model PushDevice {
+  id            String         @id @default(uuid())
+  userId        String
+  expoPushToken String         @unique
+  platform      DevicePlatform @default(ANDROID)
+  deviceId      String?
+  deviceModel   String?
+  appVersion    String?
+  enabled       Boolean        @default(true)
+  lastSeenAt    DateTime       @default(now())
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, enabled])
+  @@index([expoPushToken])
 }
 
 model StudentBehaviorRecord {

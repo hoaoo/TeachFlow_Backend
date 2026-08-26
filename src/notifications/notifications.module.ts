@@ -1,5 +1,6 @@
 import { Module, Global } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
+import { PushNotificationService } from './push-notification.service';
 import { NotificationsController } from './notifications.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
@@ -7,7 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Module({
   imports: [PrismaModule],
   controllers: [NotificationsController],
-  providers: [NotificationsService],
-  exports: [NotificationsService],
+  providers: [NotificationsService, PushNotificationService],
+  exports: [NotificationsService, PushNotificationService],
 })
 export class NotificationsModule {}
