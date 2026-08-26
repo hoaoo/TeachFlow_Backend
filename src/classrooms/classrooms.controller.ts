@@ -22,7 +22,7 @@ import { Role } from '@prisma/client';
 
 @ApiTags('Classes')
 @ApiBearerAuth()
-@Controller('classes')
+@Controller(['classes', 'classrooms'])
 export class ClassroomsController {
   constructor(private classroomsService: ClassroomsService) {}
 

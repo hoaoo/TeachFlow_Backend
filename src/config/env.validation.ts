@@ -30,6 +30,7 @@ export interface ValidatedEnvironment {
   RESOURCE_MAX_PPT_MB: number;
   RESOURCE_MAX_VIDEO_MB: number;
   IMPORT_MAX_FILE_SIZE_MB: number;
+  API_BASE_URL?: string;
   GEMMA_MODEL: string;
   GEMINI_FAST_MODEL: string;
   GEMINI_COMPLEX_MODEL: string;
@@ -115,6 +116,7 @@ export function validateEnvironment(): ValidatedEnvironment {
     RESOURCE_MAX_PPT_MB: parseInt(process.env.RESOURCE_MAX_PPT_MB || '100', 10),
     RESOURCE_MAX_VIDEO_MB: parseInt(process.env.RESOURCE_MAX_VIDEO_MB || '500', 10),
     IMPORT_MAX_FILE_SIZE_MB: parseInt(process.env.IMPORT_MAX_FILE_SIZE_MB || '10', 10),
+    API_BASE_URL: process.env.API_BASE_URL || '',
     GEMMA_MODEL: process.env.GEMMA_MODEL || 'gemma-4-26b-a4b-it',
     GEMINI_FAST_MODEL: process.env.GEMINI_FAST_MODEL || 'gemini-3.5-flash-lite',
     GEMINI_COMPLEX_MODEL: process.env.GEMINI_COMPLEX_MODEL || process.env.GEMINI_MODEL || 'gemini-3.7-flash',

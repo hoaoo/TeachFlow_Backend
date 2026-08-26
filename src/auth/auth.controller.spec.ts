@@ -31,7 +31,7 @@ describe('AuthController', () => {
   });
 
   describe('login', () => {
-    it('should login and set refresh cookie with proper options', async () => {
+    it('should login, return tokens in JSON body and set refresh cookie with proper options', async () => {
       const mockResult = {
         user: { id: 'u1', email: 'teacher@teachflow.vn', role: 'TEACHER' },
         tokens: { accessToken: 'acc_123', refreshToken: 'ref_123', tokenType: 'Bearer', expiresIn: '15m' },
@@ -60,7 +60,8 @@ describe('AuthController', () => {
         }),
       );
       expect(res.accessToken).toBe('acc_123');
-      expect((res as any).refreshToken).toBeUndefined();
+      expect(res.refreshToken).toBe('ref_123');
+      expect(res.tokenType).toBe('Bearer');
     });
   });
 
@@ -84,7 +85,7 @@ describe('AuthController', () => {
       );
     });
 
-    it('should read refresh token from cookie and refresh tokens', async () => {
+    it('should read refresh token from body or cookie and return rotated tokens in JSON', async () => {
       const payload = { sub: 'u1', email: 'teacher@teachflow.vn' };
       const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
       const validJwt = `header.${base64Payload}.sig`;
@@ -113,7 +114,29 @@ describe('AuthController', () => {
         }),
       );
       expect(res.accessToken).toBe('new_acc_123');
-      expect((res as any).refreshToken).toBeUndefined();
+      expect(res.refreshToken).toBe('new_ref_123');
+    });
+
+    it('should accept refresh token from body when cookie is not present (Mobile Native)', async () => {
+      const payload = { sub: 'u2', email: 'teacher2@teachflow.vn' };
+      const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
+      const validJwt = `header.${base64Payload}.sig`;
+
+      const mockReq = { cookies: {} } as any;
+      const mockRes = { cookie: jest.fn() } as any;
+
+      (authService.refreshToken as jest.Mock).mockResolvedValue({
+        accessToken: 'new_acc_456',
+        refreshToken: 'new_ref_456',
+        tokenType: 'Bearer',
+        expiresIn: '15m',
+      });
+
+      const res = await controller.refresh(mockReq, { refreshToken: validJwt }, mockRes);
+
+      expect(authService.refreshToken).toHaveBeenCalledWith('u2', validJwt);
+      expect(res.accessToken).toBe('new_acc_456');
+      expect(res.refreshToken).toBe('new_ref_456');
     });
 
     it('should throw 401 if refresh token is malformed', async () => {
@@ -133,8 +156,8 @@ describe('AuthController', () => {
       const mockRes = { clearCookie: jest.fn() } as any;
       (authService.logout as jest.Mock).mockResolvedValue({ message: 'Đăng xuất thành công' });
 
-      const mockReq = { cookies: { refreshToken: 'ref_123' } } as any;
-      const res = await controller.logout(mockReq, mockRes);
+      const mockReq = { cookies: { refreshToken: 'ref_123' }, headers: {} } as any;
+      const res = await controller.logout(mockReq, undefined, mockRes);
 
       expect(mockRes.clearCookie).toHaveBeenCalledWith(
         'refreshToken',
@@ -144,6 +167,25 @@ describe('AuthController', () => {
         }),
       );
       expect(authService.logout).toHaveBeenCalledWith(undefined, 'ref_123');
+      expect(res).toEqual({ message: 'Đăng xuất thành công' });
+    });
+
+    it('should revoke token from body and Authorization header on Mobile Native logout', async () => {
+      const mockRes = { clearCookie: jest.fn() } as any;
+      (authService.logout as jest.Mock).mockResolvedValue({ message: 'Đăng xuất thành công' });
+
+      const payload = { sub: 'u10', email: 'teacher10@teachflow.vn' };
+      const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
+      const validBearer = `Bearer header.${base64Payload}.sig`;
+
+      const mockReq = {
+        cookies: {},
+        headers: { authorization: validBearer },
+      } as any;
+
+      const res = await controller.logout(mockReq, { refreshToken: 'mobile_ref_token' }, mockRes);
+
+      expect(authService.logout).toHaveBeenCalledWith('u10', 'mobile_ref_token');
       expect(res).toEqual({ message: 'Đăng xuất thành công' });
     });
   });

@@ -3,14 +3,22 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
 import { determineResourceType, validateUploadedFile } from './resources.validator';
 import { UploadResourceDto } from './dto/upload-resource.dto';
 import { CreateResourceDto, UpdateResourceDto } from './dto/create-resource.dto';
+import {
+  PresignUploadDto,
+  PresignedUploadResponseDto,
+  CompleteUploadDto,
+  ResourceSignedUrlDto,
+} from './dto/presign-upload.dto';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @Injectable()
@@ -44,7 +52,154 @@ export class ResourcesService {
   }
 
   /**
-   * Upload real file and persist metadata
+   * 1. Presign Upload URL for Mobile & Web direct-to-storage upload
+   */
+  async presignUpload(
+    dto: PresignUploadDto,
+    user: AuthenticatedUser,
+  ): Promise<PresignedUploadResponseDto> {
+    const teacherId = await this.getTeacherId(user);
+    return this.storageService.generatePresignedUpload(dto, teacherId);
+  }
+
+  /**
+   * 2. Complete Upload: create database record after direct upload succeeds
+   */
+  async completeUpload(
+    dto: CompleteUploadDto,
+    user: AuthenticatedUser,
+  ) {
+    const teacherId = await this.getTeacherId(user);
+    const storedFileName = path.basename(dto.fileKey);
+
+    const exists = await this.storageService.fileExists(storedFileName);
+    if (!exists) {
+      throw new BadRequestException('Tập tin chưa được tải lên hoặc khóa tệp không hợp lệ');
+    }
+
+    const stats = await this.storageService.getFileStats(storedFileName);
+    const size = dto.size || stats?.size || 0;
+    const ext = path.extname(storedFileName).toLowerCase();
+    const resourceType = determineResourceType(ext);
+
+    const resource = await this.prisma.teachingResource.create({
+      data: {
+        teacherId,
+        name: dto.name.trim(),
+        title: dto.name.trim(),
+        originalFileName: dto.name.trim().includes('.') ? dto.name.trim() : `${dto.name.trim()}${ext}`,
+        storedFileName,
+        storagePath: this.storageService.getSafeFilePath(storedFileName),
+        mimeType: dto.mimeType || 'application/octet-stream',
+        size,
+        resourceType,
+        subjectId: dto.subjectId || null,
+        gradeId: dto.gradeId || null,
+        lessonId: dto.lessonId || null,
+        description: dto.description || null,
+        status: 'ACTIVE',
+        meta: `${this.formatFileSize(size)} · ${ext.toUpperCase().replace('.', '')}`,
+        tone: dto.tone || 'teal',
+      },
+      include: {
+        subject: true,
+        grade: true,
+        lesson: true,
+      },
+    });
+
+    this.logger.log(
+      `Resource complete-upload: id=${resource.id} teacherId=${teacherId} size=${size} type=${resourceType}`,
+    );
+
+    return this.mapResourceResponse(resource);
+  }
+
+  /**
+   * 3. Generate temporary signed GET URL for secure mobile/web viewing & streaming
+   */
+  async getSignedAccessUrl(
+    id: string,
+    user: AuthenticatedUser,
+    ttlSeconds = 3600,
+  ): Promise<ResourceSignedUrlDto> {
+    const teacherId = await this.getTeacherId(user);
+    const resource = await this.prisma.teachingResource.findUnique({
+      where: { id },
+    });
+
+    if (!resource || resource.deletedAt) {
+      throw new NotFoundException('Không tìm thấy tài nguyên');
+    }
+
+    if (user.role !== 'ADMIN' && resource.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền truy cập tài nguyên này');
+    }
+
+    if (!resource.storedFileName) {
+      throw new NotFoundException('Tài nguyên không có tập tin đính kèm');
+    }
+
+    const { token, expiresAt } = this.storageService.generateSignedAccessToken(
+      resource.storedFileName,
+      teacherId,
+      ttlSeconds,
+    );
+
+    const host = this.configService.get<string>('API_BASE_URL') || '';
+    const url = `${host}/api/resources/stream/${resource.storedFileName}?token=${token}`;
+
+    return {
+      url,
+      expiresAt: expiresAt.toISOString(),
+      fileName: resource.originalFileName || resource.name,
+      mimeType: resource.mimeType || 'application/octet-stream',
+      size: resource.size || 0,
+    };
+  }
+
+  /**
+   * 4. Verify signed access token and return file info for streaming
+   */
+  async getSafeFileForStream(storedFileName: string, token: string) {
+    const verified = this.storageService.verifySignedAccessToken(storedFileName, token);
+    if (!verified.valid) {
+      throw new UnauthorizedException('Chữ ký truy cập không hợp lệ hoặc đã hết hạn');
+    }
+
+    const exists = await this.storageService.fileExists(storedFileName);
+    if (!exists) {
+      throw new NotFoundException('Tập tin không tồn tại trên hệ thống lưu trữ');
+    }
+
+    const filePath = this.storageService.getSafeFilePath(storedFileName);
+    const stats = await this.storageService.getFileStats(storedFileName);
+
+    return {
+      filePath,
+      size: stats?.size || 0,
+      teacherId: verified.teacherId,
+    };
+  }
+
+  /**
+   * Direct Upload handler: save direct upload chunk
+   */
+  async handleDirectUpload(
+    storedFileName: string,
+    token: string,
+    stream: NodeJS.ReadableStream,
+  ) {
+    const verified = this.storageService.verifyUploadToken(storedFileName, token);
+    if (!verified.valid) {
+      throw new UnauthorizedException('Mã xác thực tải lên trực tiếp không hợp lệ hoặc đã hết hạn');
+    }
+
+    return this.storageService.saveStreamToFile(storedFileName, stream);
+  }
+
+  /**
+   * Upload real file via multipart form (standard web upload)
    */
   async uploadResource(
     file: Express.Multer.File,
@@ -52,15 +207,11 @@ export class ResourcesService {
     user: AuthenticatedUser,
   ) {
     const teacherId = await this.getTeacherId(user);
-    // Validate file with type-specific size limit from config
     const validation = validateUploadedFile(file, undefined, undefined, this.configService);
-
-    // Save physical file to storage
     const stored = await this.storageService.saveFile(file, validation.extension);
 
     const displayName = dto.name?.trim() || validation.sanitizedOriginalName;
 
-    // Save database record
     const resource = await this.prisma.teachingResource.create({
       data: {
         teacherId,
@@ -96,40 +247,44 @@ export class ResourcesService {
 
   /**
    * Persist an AI-generated (or extracted) binary as a TeachingResource.
-   * Stores the file via StorageService; DB only keeps metadata/reference.
    */
-  async saveGeneratedFile(
-    user: AuthenticatedUser,
-    params: {
-      buffer: Buffer;
-      extension: string;
+  async saveGeneratedBinary(
+    buffer: Buffer,
+    dto: {
+      title: string;
+      originalFileName: string;
       mimeType: string;
-      name: string;
+      subjectId?: string;
+      gradeId?: string;
+      lessonId?: string;
       description?: string;
-      resourceType?: string;
+      tone?: string;
     },
+    user: AuthenticatedUser,
   ) {
     const teacherId = await this.getTeacherId(user);
-    const ext = params.extension.startsWith('.') ? params.extension : `.${params.extension}`;
-    const stored = await this.storageService.saveBuffer(params.buffer, ext);
-    const displayName = (params.name || 'Tài nguyên AI').trim().slice(0, 120);
-    const sanitizedOriginalName = `${displayName.replace(/[\/\\?%*:|"<>]/g, '_')}${ext}`.slice(0, 120);
+    const ext = path.extname(dto.originalFileName) || '.dat';
+    const stored = await this.storageService.saveBuffer(buffer, ext);
+    const resourceType = determineResourceType(ext);
 
     const resource = await this.prisma.teachingResource.create({
       data: {
         teacherId,
-        name: displayName,
-        title: displayName,
-        originalFileName: sanitizedOriginalName,
+        name: dto.title.trim(),
+        title: dto.title.trim(),
+        originalFileName: dto.originalFileName,
         storedFileName: stored.storedFileName,
         storagePath: stored.storagePath,
-        mimeType: params.mimeType || 'application/octet-stream',
+        mimeType: dto.mimeType,
         size: stored.size,
-        resourceType: params.resourceType || determineResourceType(ext),
-        description: params.description || null,
+        resourceType,
+        subjectId: dto.subjectId || null,
+        gradeId: dto.gradeId || null,
+        lessonId: dto.lessonId || null,
+        description: dto.description || null,
         status: 'ACTIVE',
-        meta: `${this.formatFileSize(stored.size)} · ${ext.toUpperCase().replace('.', '')} · AI`,
-        tone: 'teal',
+        meta: `${this.formatFileSize(stored.size)} · ${ext.toUpperCase().replace('.', '')}`,
+        tone: dto.tone || 'violet',
       },
       include: {
         subject: true,
@@ -138,15 +293,38 @@ export class ResourcesService {
       },
     });
 
-    this.logger.log(
-      `Generated resource saved: id=${resource.id} teacherId=${teacherId} size=${stored.size} type=${resource.resourceType}`,
-    );
-
     return this.mapResourceResponse(resource);
   }
 
   /**
-   * List resources with optional filters
+   * Alias for Image AI and other internal modules
+   */
+  async saveGeneratedFile(
+    user: AuthenticatedUser,
+    opts: {
+      buffer: Buffer;
+      extension: string;
+      mimeType: string;
+      name: string;
+      description?: string;
+      resourceType?: string;
+    },
+  ) {
+    const ext = opts.extension.startsWith('.') ? opts.extension : `.${opts.extension}`;
+    return this.saveGeneratedBinary(
+      opts.buffer,
+      {
+        title: opts.name,
+        originalFileName: `${opts.name}${ext}`,
+        mimeType: opts.mimeType,
+        description: opts.description,
+      },
+      user,
+    );
+  }
+
+  /**
+   * Find all resources with filtering and teacher ownership isolation (IDOR proof)
    */
   async findAll(
     user: AuthenticatedUser,
@@ -157,28 +335,30 @@ export class ResourcesService {
       search?: string;
     },
   ) {
-    const where: any = { deletedAt: null };
-
-    if (user.role !== 'ADMIN') {
-      const teacherId = await this.getTeacherId(user);
-      where.teacherId = teacherId;
-    }
+    const teacherId = await this.getTeacherId(user);
+    const where: any = {
+      teacherId,
+      deletedAt: null,
+    };
 
     if (filters?.subjectId) {
       where.subjectId = filters.subjectId;
     }
+
     if (filters?.gradeId) {
       where.gradeId = filters.gradeId;
     }
-    if (filters?.resourceType && filters.resourceType !== 'ALL') {
+
+    if (filters?.resourceType) {
       where.resourceType = filters.resourceType;
     }
+
     if (filters?.search) {
+      const s = filters.search.trim();
       where.OR = [
-        { name: { contains: filters.search, mode: 'insensitive' } },
-        { title: { contains: filters.search, mode: 'insensitive' } },
-        { originalFileName: { contains: filters.search, mode: 'insensitive' } },
-        { description: { contains: filters.search, mode: 'insensitive' } },
+        { name: { contains: s, mode: 'insensitive' } },
+        { title: { contains: s, mode: 'insensitive' } },
+        { description: { contains: s, mode: 'insensitive' } },
       ];
     }
 
@@ -196,10 +376,11 @@ export class ResourcesService {
   }
 
   /**
-   * Get single resource detail
+   * Find single resource with strict ownership check
    */
   async findOne(id: string, user: AuthenticatedUser) {
-    const res = await this.prisma.teachingResource.findUnique({
+    const teacherId = await this.getTeacherId(user);
+    const resource = await this.prisma.teachingResource.findUnique({
       where: { id },
       include: {
         subject: true,
@@ -208,51 +389,40 @@ export class ResourcesService {
       },
     });
 
-    if (!res || res.deletedAt) {
-      throw new NotFoundException('Không tìm thấy tài nguyên dạy học');
+    if (!resource || resource.deletedAt) {
+      throw new NotFoundException('Không tìm thấy tài nguyên học liệu');
     }
 
-    const teacherId = await this.getTeacherId(user);
-    if (user.role !== 'ADMIN' && res.teacherId !== teacherId) {
+    if (user.role !== 'ADMIN' && resource.teacherId !== teacherId) {
       throw new ForbiddenException('Bạn không có quyền truy cập tài nguyên này');
     }
 
-    return this.mapResourceResponse(res);
+    return this.mapResourceResponse(resource);
   }
 
   /**
-   * Get physical file details for download or stream
+   * Get physical file path and metadata for download/inline preview
    */
   async getFileForDownload(id: string, user: AuthenticatedUser) {
-    const res = await this.prisma.teachingResource.findUnique({
-      where: { id },
-    });
+    const resource = await this.findOne(id, user);
 
-    if (!res || res.deletedAt) {
-      throw new NotFoundException('Không tìm thấy tài nguyên dạy học');
+    if (!resource.storedFileName) {
+      throw new NotFoundException('Tài nguyên này không có tập tin vật lý đính kèm');
     }
 
-    const teacherId = await this.getTeacherId(user);
-    if (user.role !== 'ADMIN' && res.teacherId !== teacherId) {
-      throw new ForbiddenException('Bạn không có quyền tải xuống tài nguyên này');
-    }
-
-    if (!res.storedFileName) {
-      throw new NotFoundException('Tài nguyên không có tệp đính kèm trên máy chủ');
-    }
-
-    const exists = await this.storageService.fileExists(res.storedFileName);
+    const exists = await this.storageService.fileExists(resource.storedFileName);
     if (!exists) {
-      throw new NotFoundException('Tệp tin vật lý không còn tồn tại trên máy chủ');
+      this.logger.error(`File missing on disk for resource ${id}: ${resource.storedFileName}`);
+      throw new NotFoundException('Tập tin không tồn tại trên hệ thống lưu trữ');
     }
 
-    const filePath = this.storageService.getSafeFilePath(res.storedFileName);
+    const filePath = this.storageService.getSafeFilePath(resource.storedFileName);
 
     return {
       filePath,
-      originalFileName: res.originalFileName || res.name || 'resource_file',
-      mimeType: res.mimeType || 'application/octet-stream',
-      size: res.size || 0,
+      originalFileName: resource.originalFileName || resource.name,
+      mimeType: resource.mimeType,
+      size: resource.size,
     };
   }
 
@@ -324,13 +494,11 @@ export class ResourcesService {
       throw new ForbiddenException('Bạn không có quyền xóa tài nguyên này');
     }
 
-    // Soft delete DB record
     await this.prisma.teachingResource.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
 
-    // Delete physical file from storage
     if (res.storedFileName) {
       await this.storageService.deleteFile(res.storedFileName);
     }

@@ -10,11 +10,119 @@ import { NotificationQueryDto } from './dto/notification-query.dto';
 import { NotificationType } from '@prisma/client';
 import { PaginatedResultDto } from '../common/dto/paginated-result.dto';
 
+export type MobileTargetType =
+  | 'ATTENDANCE'
+  | 'STUDENT'
+  | 'LESSON_PLAN'
+  | 'SCHEDULE'
+  | 'TASK'
+  | 'WORKSHEET'
+  | 'HOMEROOM'
+  | 'SYSTEM';
+
+export interface MobileNotificationPayload {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  body: string; // Mobile native alias
+  type: NotificationType;
+  targetType: MobileTargetType;
+  targetId: string | null;
+  metadata: Record<string, any>;
+  link: string | null;
+  isRead: boolean;
+  readAt: Date | null;
+  createdAt: Date;
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Parse domain deep link and target metadata for mobile native navigation
+   */
+  private formatNotification(n: any): MobileNotificationPayload {
+    let targetType: MobileTargetType = 'SYSTEM';
+    let targetId: string | null = null;
+    const metadata: Record<string, any> = {};
+
+    if (n.link) {
+      if (n.link.includes('attendance') || n.link.includes('homeroom')) {
+        targetType = 'ATTENDANCE';
+        const match = n.link.match(/classroomId=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          targetId = match[1];
+          metadata.classroomId = match[1];
+        }
+      } else if (n.link.includes('students')) {
+        targetType = 'STUDENT';
+        const match =
+          n.link.match(/\/students\/([a-zA-Z0-9_-]+)/) ||
+          n.link.match(/studentId=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          targetId = match[1];
+          metadata.studentId = match[1];
+        }
+      } else if (n.link.includes('schedule')) {
+        targetType = 'SCHEDULE';
+        const match = n.link.match(/scheduleId=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          targetId = match[1];
+          metadata.scheduleId = match[1];
+        }
+      } else if (n.link.includes('lessons') || n.link.includes('lesson-plans')) {
+        targetType = 'LESSON_PLAN';
+        const match =
+          n.link.match(/\/lessons?\/([a-zA-Z0-9_-]+)/) ||
+          n.link.match(/lessonPlanId=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          targetId = match[1];
+          metadata.lessonPlanId = match[1];
+        }
+      } else if (n.link.includes('tasks')) {
+        targetType = 'TASK';
+        const match = n.link.match(/taskId=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          targetId = match[1];
+          metadata.taskId = match[1];
+        }
+      } else if (n.link.includes('worksheets')) {
+        targetType = 'WORKSHEET';
+        const match = n.link.match(/worksheetId=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          targetId = match[1];
+          metadata.worksheetId = match[1];
+        }
+      }
+    } else {
+      // Fallback by type
+      if (n.type === NotificationType.HOMEROOM) targetType = 'HOMEROOM';
+      else if (n.type === NotificationType.ASSIGNMENT) targetType = 'SCHEDULE';
+      else if (n.type === NotificationType.TASK) targetType = 'TASK';
+      else if (n.type === NotificationType.ENROLLMENT) targetType = 'STUDENT';
+      else if (n.type === NotificationType.ASSESSMENT) targetType = 'STUDENT';
+    }
+
+    return {
+      id: n.id,
+      userId: n.userId,
+      title: n.title,
+      message: n.message,
+      body: n.message,
+      type: n.type,
+      targetType,
+      targetId,
+      metadata,
+      link: n.link,
+      isRead: n.isRead,
+      readAt: n.readAt,
+      createdAt: n.createdAt,
+    };
+  }
 
   /**
    * Create an in-app notification.
@@ -51,7 +159,7 @@ export class NotificationsService {
         `[NOTIFICATION_CREATED] id=${notification.id} userId=${targetUserId} type=${notification.type} title="${notification.title}"`,
       );
 
-      return notification;
+      return this.formatNotification(notification);
     } catch (err: any) {
       this.logger.warn(`Failed to create notification: ${err?.message}`);
       return null;
@@ -77,7 +185,6 @@ export class NotificationsService {
       const now = new Date();
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
-      const todayStr = todayStart.toISOString().split('T')[0];
 
       // Fetch today's existing notifications to ensure 100% idempotency
       const existingToday = await this.prisma.notification.findMany({
@@ -149,7 +256,7 @@ export class NotificationsService {
 
       for (const s of todaySchedules) {
         const title = `Tiết ${s.title || 'dạy'} lớp ${s.classroom?.name || ''} lúc ${s.startTime}`;
-        const link = `/schedule`;
+        const link = `/schedule?scheduleId=${s.id}`;
         if (!existingKeySet.has(`${title}|${link}`)) {
           notificationsToCreate.push({
             title,
@@ -161,58 +268,42 @@ export class NotificationsService {
         }
       }
 
-      // 3. Check Student Birthdays in Next 3 Days
-      const activeStudents = await this.prisma.student.findMany({
+      // 3. Check Student Birthdays Today
+      const allActiveStudents = await this.prisma.student.findMany({
         where: {
           deletedAt: null,
-          dateOfBirth: { not: null },
-          studentEnrollments: {
+          classStudents: {
             some: {
               status: 'ACTIVE',
               classroom: {
+                deletedAt: null,
                 OR: [{ teacherId }, { homeroomTeacherId: teacherId }],
               },
             },
           },
         },
-        select: {
-          id: true,
-          fullName: true,
-          dateOfBirth: true,
-          studentEnrollments: {
-            where: {
-              status: 'ACTIVE',
-              classroom: {
-                OR: [{ teacherId }, { homeroomTeacherId: teacherId }],
-              },
-            },
-            select: { classroom: { select: { name: true } } },
-            take: 1,
+        include: {
+          classStudents: {
+            where: { status: 'ACTIVE' },
+            include: { classroom: { select: { name: true } } },
           },
         },
       });
 
-      const currentMonth = now.getMonth();
-      const currentDay = now.getDate();
+      const todayMonth = now.getMonth() + 1;
+      const todayDay = now.getDate();
 
-      for (const st of activeStudents) {
-        if (!st.dateOfBirth) continue;
-        const dob = new Date(st.dateOfBirth);
-        const bMonth = dob.getMonth();
-        const bDay = dob.getDate();
-
-        // Check if birthday is today or within next 3 days
-        if (bMonth === currentMonth) {
-          const diffDays = bDay - currentDay;
-          if (diffDays >= 0 && diffDays <= 3) {
-            const className = st.studentEnrollments?.[0]?.classroom?.name || '';
-            const dayText = diffDays === 0 ? 'hôm nay' : `sau ${diffDays} ngày (${bDay}/${bMonth + 1})`;
-            const title = `Sinh nhật học sinh ${st.fullName} ${dayText}`;
-            const link = `/homeroom?tab=students`;
+      for (const student of allActiveStudents) {
+        if (student.dateOfBirth) {
+          const dob = new Date(student.dateOfBirth);
+          if (dob.getMonth() + 1 === todayMonth && dob.getDate() === todayDay) {
+            const className = student.classStudents[0]?.classroom?.name || '';
+            const title = `Hôm nay là sinh nhật em ${student.fullName} (${className})`;
+            const link = `/students/${student.id}`;
             if (!existingKeySet.has(`${title}|${link}`)) {
               notificationsToCreate.push({
                 title,
-                message: `Học sinh ${st.fullName} (Lớp ${className}) có ngày sinh nhật ${dayText}.`,
+                message: `Học sinh ${student.fullName} tròn tuổi mới hôm nay. Hãy gửi lời chúc mừng đến em!`,
                 type: NotificationType.ENROLLMENT,
                 link,
               });
@@ -222,30 +313,60 @@ export class NotificationsService {
         }
       }
 
-      // 4. Check Pending Tasks Due Today or Overdue
-      const dueTasks = await this.prisma.teacherTask.findMany({
+      // 4. Check Tasks Overdue or Due Today
+      const todayStr = todayStart.toISOString().split('T')[0];
+      const pendingTasks = await this.prisma.teacherTask.findMany({
         where: {
           teacherId,
           done: false,
-          OR: [
-            { dueDate: { lte: todayStr } },
-            { taskDate: { lte: todayStr } },
-          ],
+          dueDate: {
+            lte: todayStr,
+          },
         },
-        take: 3,
       });
 
-      for (const t of dueTasks) {
-        const title = `Việc cần làm đến hạn: ${t.title}`;
-        const link = `/homeroom?tab=tasks`;
+      for (const task of pendingTasks) {
+        const title = `Nhiệm vụ cần hoàn thành: ${task.title}`;
+        const link = `/tasks?taskId=${task.id}`;
         if (!existingKeySet.has(`${title}|${link}`)) {
           notificationsToCreate.push({
             title,
-            message: `Công việc "${t.title}" đã đến hạn hoàn thành.`,
+            message: `Nhiệm vụ "${task.title}" có hạn chót hôm nay (${task.dueDate || ''}).`,
             type: NotificationType.TASK,
             link,
           });
           existingKeySet.add(`${title}|${link}`);
+        }
+      }
+
+      // 5. Check Worksheet Assignments Due Today
+      const activeAssignments = await this.prisma.worksheetAssignment.findMany({
+        where: {
+          teacherId,
+          dueAt: {
+            gte: todayStart,
+            lte: todayEnd,
+          },
+        },
+        include: {
+          worksheet: { select: { id: true, title: true } },
+          classroom: { select: { name: true } },
+        },
+      });
+
+      for (const assign of activeAssignments) {
+        if (assign.worksheet) {
+          const title = `Hạn nộp phiếu học tập "${assign.worksheet.title}" (${assign.classroom?.name || ''})`;
+          const link = `/worksheets?worksheetId=${assign.worksheet.id}`;
+          if (!existingKeySet.has(`${title}|${link}`)) {
+            notificationsToCreate.push({
+              title,
+              message: `Hôm nay là hạn nộp bài phiếu học tập "${assign.worksheet.title}" của lớp ${assign.classroom?.name || ''}.`,
+              type: NotificationType.ASSESSMENT,
+              link,
+            });
+            existingKeySet.add(`${title}|${link}`);
+          }
         }
       }
 
@@ -299,7 +420,8 @@ export class NotificationsService {
       }),
     ]);
 
-    const paginated = new PaginatedResultDto(items, total, page, pageSize);
+    const formattedItems = items.map((item) => this.formatNotification(item));
+    const paginated = new PaginatedResultDto(formattedItems, total, page, pageSize);
 
     return {
       ...paginated,
@@ -335,16 +457,18 @@ export class NotificationsService {
     }
 
     if (notification.isRead) {
-      return notification;
+      return this.formatNotification(notification);
     }
 
-    return this.prisma.notification.update({
+    const updated = await this.prisma.notification.update({
       where: { id },
       data: {
         isRead: true,
         readAt: new Date(),
       },
     });
+
+    return this.formatNotification(updated);
   }
 
   /**

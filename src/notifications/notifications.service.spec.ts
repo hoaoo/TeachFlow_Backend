@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
 
-describe('NotificationsService', () => {
+describe('NotificationsService (Mobile Deep-link & Reminders)', () => {
   let service: NotificationsService;
   let prisma: PrismaService;
 
@@ -12,8 +12,24 @@ describe('NotificationsService', () => {
     teacher: {
       findUnique: jest.fn(),
     },
+    classroom: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    schedule: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    student: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    teacherTask: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    worksheetAssignment: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     notification: {
       create: jest.fn(),
+      createMany: jest.fn(),
       findMany: jest.fn(),
       findUnique: jest.fn(),
       count: jest.fn(),
@@ -41,31 +57,31 @@ describe('NotificationsService', () => {
   });
 
   describe('createNotification()', () => {
-    it('should create notification using direct userId', async () => {
+    it('should create notification using direct userId and format mobile target metadata', async () => {
       mockPrismaService.notification.create.mockResolvedValue({
         id: 'notif-1',
         userId: 'user-1',
-        title: 'Thông báo',
-        message: 'Nội dung',
-        type: NotificationType.SYSTEM,
+        title: 'Thông báo điểm danh',
+        message: 'Chưa điểm danh lớp 4A',
+        type: NotificationType.HOMEROOM,
+        link: '/homeroom?tab=attendance&classroomId=class-123',
+        isRead: false,
+        readAt: null,
+        createdAt: new Date(),
       });
 
       const res = await service.createNotification({
         userId: 'user-1',
-        title: 'Thông báo',
-        message: 'Nội dung',
+        title: 'Thông báo điểm danh',
+        message: 'Chưa điểm danh lớp 4A',
+        link: '/homeroom?tab=attendance&classroomId=class-123',
       });
 
-      expect(mockPrismaService.notification.create).toHaveBeenCalledWith({
-        data: {
-          userId: 'user-1',
-          title: 'Thông báo',
-          message: 'Nội dung',
-          type: NotificationType.SYSTEM,
-          link: null,
-        },
-      });
       expect(res?.id).toBe('notif-1');
+      expect(res?.targetType).toBe('ATTENDANCE');
+      expect(res?.targetId).toBe('class-123');
+      expect(res?.metadata.classroomId).toBe('class-123');
+      expect(res?.body).toBe('Chưa điểm danh lớp 4A');
     });
 
     it('should resolve teacherId to userId before creating notification', async () => {
@@ -78,6 +94,10 @@ describe('NotificationsService', () => {
         title: 'Phân công',
         message: 'Nội dung',
         type: NotificationType.ASSIGNMENT,
+        link: null,
+        isRead: false,
+        readAt: null,
+        createdAt: new Date(),
       });
 
       const res = await service.createNotification({
@@ -95,18 +115,33 @@ describe('NotificationsService', () => {
     });
   });
 
-  describe('getUserNotifications() & unread counts', () => {
-    it('should return paginated list and unread count', async () => {
+  describe('getUserNotifications() & deep linking', () => {
+    it('should return paginated list with mobile deep-link metadata and unread count', async () => {
+      mockPrismaService.notification.findMany
+        .mockResolvedValueOnce([]) // existingToday in generateTeacherReminders
+        .mockResolvedValueOnce([
+          {
+            id: 'n1',
+            userId: 'user-1',
+            title: 'Học sinh mới',
+            message: 'Em Nguyễn Văn A vừa chuyển vào lớp',
+            type: NotificationType.ENROLLMENT,
+            link: '/students/student-abc',
+            isRead: false,
+            readAt: null,
+            createdAt: new Date(),
+          },
+        ]);
       mockPrismaService.notification.count
         .mockResolvedValueOnce(10) // total
         .mockResolvedValueOnce(3); // unread
-      mockPrismaService.notification.findMany.mockResolvedValue([
-        { id: 'n1', title: 'Thông báo 1', isRead: false },
-      ]);
 
-      const res = await service.getUserNotifications('user-1', { page: 1, pageSize: 20 });
+      const res = await service.getUserNotifications('user-1', 'teacher-1', { page: 1, pageSize: 20 });
 
       expect(res.items).toHaveLength(1);
+      expect(res.items[0].targetType).toBe('STUDENT');
+      expect(res.items[0].targetId).toBe('student-abc');
+      expect(res.items[0].metadata.studentId).toBe('student-abc');
       expect(res.totalItems).toBe(10);
       expect(res.unreadCount).toBe(3);
     });
@@ -134,7 +169,13 @@ describe('NotificationsService', () => {
       mockPrismaService.notification.update.mockResolvedValue({
         id: 'notif-mine',
         userId: 'user-me',
+        title: 'Thông báo của tôi',
+        message: 'Nội dung',
+        type: NotificationType.SYSTEM,
+        link: null,
         isRead: true,
+        readAt: new Date(),
+        createdAt: new Date(),
       });
 
       const res = await service.markAsRead('notif-mine', 'user-me');

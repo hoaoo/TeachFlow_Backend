@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as XLSX from 'xlsx';
-import archiver = require('archiver');
+import * as archiver from 'archiver';
 import { PassThrough } from 'stream';
 import { ExportBackupDto } from './dto/export-backup.dto';
 
