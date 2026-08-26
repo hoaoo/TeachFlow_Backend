@@ -1,9 +1,14 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as XLSX from 'xlsx';
-import * as archiver from 'archiver';
 import { PassThrough } from 'stream';
 import { ExportBackupDto } from './dto/export-backup.dto';
+
+function getArchiver() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require('archiver');
+  return typeof mod === 'function' ? mod : mod.default || mod;
+}
 
 @Injectable()
 export class TeacherBackupService {
@@ -59,7 +64,8 @@ export class TeacherBackupService {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
 
-    const archive = (archiver as any)('zip', { zlib: { level: 6 } });
+    const archiverFn = getArchiver();
+    const archive = archiverFn('zip', { zlib: { level: 6 } });
     const passThrough = new PassThrough();
     archive.pipe(passThrough);
 

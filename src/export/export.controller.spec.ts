@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ExportController } from './export.controller';
 import { ExportService } from './export.service';
+import { TeacherBackupService } from './teacher-backup.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
 describe('ExportController', () => {
@@ -14,6 +15,10 @@ describe('ExportController', () => {
     exportWorksheetPdf: jest.fn(),
   };
 
+  const mockTeacherBackupService = {
+    generateBackupZip: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -23,6 +28,10 @@ describe('ExportController', () => {
         {
           provide: ExportService,
           useValue: mockExportService,
+        },
+        {
+          provide: TeacherBackupService,
+          useValue: mockTeacherBackupService,
         },
       ],
     })
