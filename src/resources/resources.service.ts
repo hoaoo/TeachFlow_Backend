@@ -10,7 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
-import { determineResourceType, validateUploadedFile } from './resources.validator';
+import { determineResourceType, validateUploadedFile, MIME_TYPE_MAP } from './resources.validator';
 import { UploadResourceDto } from './dto/upload-resource.dto';
 import { CreateResourceDto, UpdateResourceDto } from './dto/create-resource.dto';
 import {
@@ -175,10 +175,27 @@ export class ResourcesService {
     const filePath = this.storageService.getSafeFilePath(storedFileName);
     const stats = await this.storageService.getFileStats(storedFileName);
 
+    const resource = await this.prisma.teachingResource.findFirst({
+      where: {
+        storedFileName,
+        deletedAt: null,
+      },
+      select: {
+        mimeType: true,
+        originalFileName: true,
+        name: true,
+      },
+    });
+
+    const ext = path.extname(storedFileName).toLowerCase();
+    const fallbackMime = (ext && (MIME_TYPE_MAP as any)[ext]?.[0]) || 'application/octet-stream';
+
     return {
       filePath,
       size: stats?.size || 0,
       teacherId: verified.teacherId,
+      mimeType: resource?.mimeType || fallbackMime,
+      originalFileName: resource?.originalFileName || resource?.name || storedFileName,
     };
   }
 

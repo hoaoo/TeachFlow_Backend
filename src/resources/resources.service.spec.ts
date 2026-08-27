@@ -91,47 +91,53 @@ describe('ResourcesService & File Validator', () => {
   });
 
   describe('File Validation & Security', () => {
-    it('should validate and accept valid PDF, DOCX, PNG, MP4 files', () => {
-      const pdfFile = {
-        originalname: 'bai_giang.pdf',
-        size: 5 * 1024 * 1024,
-        mimetype: 'application/pdf',
-      } as any;
-      const resPdf = validateUploadedFile(pdfFile, 25);
-      expect(resPdf.extension).toBe('.pdf');
-      expect(resPdf.resourceType).toBe('DOCUMENT');
+    it('should validate and accept valid PDF, DOCX, XLSX, PPTX, TXT, PNG, GIF, MP3, WAV, M4A, AAC, MP4, WEBM, MOV files', () => {
+      const testCases = [
+        { name: 'bai_giang.pdf', mime: 'application/pdf', type: 'DOCUMENT', ext: '.pdf' },
+        { name: 'giao_an.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', type: 'DOCUMENT', ext: '.docx' },
+        { name: 'bang_diem.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', type: 'SPREADSHEET', ext: '.xlsx' },
+        { name: 'trinh_chieu.pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', type: 'PRESENTATION', ext: '.pptx' },
+        { name: 'ghi_chu.txt', mime: 'text/plain', type: 'DOCUMENT', ext: '.txt' },
+        { name: 'hinh_anh.png', mime: 'image/png', type: 'IMAGE', ext: '.png' },
+        { name: 'anh_dong.gif', mime: 'image/gif', type: 'IMAGE', ext: '.gif' },
+        { name: 'bai_hat.mp3', mime: 'audio/mpeg', type: 'AUDIO', ext: '.mp3' },
+        { name: 'am_thanh.wav', mime: 'audio/wav', type: 'AUDIO', ext: '.wav' },
+        { name: 'thu_am.m4a', mime: 'audio/mp4', type: 'AUDIO', ext: '.m4a' },
+        { name: 'nhac.aac', mime: 'audio/aac', type: 'AUDIO', ext: '.aac' },
+        { name: 'video_tiet_hoc.mp4', mime: 'video/mp4', type: 'VIDEO', ext: '.mp4' },
+        { name: 'video_thi_nghiem.webm', mime: 'video/webm', type: 'VIDEO', ext: '.webm' },
+        { name: 'clip.mov', mime: 'video/quicktime', type: 'VIDEO', ext: '.mov' },
+      ];
 
-      const docxFile = {
-        originalname: 'giao_an.docx',
-        size: 2 * 1024 * 1024,
-        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      } as any;
-      const resDocx = validateUploadedFile(docxFile, 25);
-      expect(resDocx.extension).toBe('.docx');
-      expect(resDocx.resourceType).toBe('DOCUMENT');
-
-      const pngFile = {
-        originalname: 'hinh_anh.png',
-        size: 1 * 1024 * 1024,
-        mimetype: 'image/png',
-      } as any;
-      const resPng = validateUploadedFile(pngFile, 25);
-      expect(resPng.extension).toBe('.png');
-      expect(resPng.resourceType).toBe('IMAGE');
+      for (const tc of testCases) {
+        const file = {
+          originalname: tc.name,
+          size: 1 * 1024 * 1024,
+          mimetype: tc.mime,
+        } as any;
+        const res = validateUploadedFile(file, 500);
+        expect(res.extension).toBe(tc.ext);
+        expect(res.resourceType).toBe(tc.type);
+      }
     });
 
     it('should reject dangerous executable / script files', () => {
-      const exeFile = { originalname: 'malware.exe', size: 1000, mimetype: 'application/x-msdownload' } as any;
-      expect(() => validateUploadedFile(exeFile)).toThrow(BadRequestException);
+      const dangerousNames = [
+        'malware.exe',
+        'script.sh',
+        'run.bat',
+        'cmd.cmd',
+        'powershell.ps1',
+        'setup.msi',
+        'payload.js',
+        'app.com',
+        'virus.scr',
+      ];
 
-      const shFile = { originalname: 'script.sh', size: 1000, mimetype: 'text/x-shellscript' } as any;
-      expect(() => validateUploadedFile(shFile)).toThrow(BadRequestException);
-
-      const batFile = { originalname: 'run.bat', size: 1000, mimetype: 'application/x-bat' } as any;
-      expect(() => validateUploadedFile(batFile)).toThrow(BadRequestException);
-
-      const jsFile = { originalname: 'payload.js', size: 1000, mimetype: 'application/javascript' } as any;
-      expect(() => validateUploadedFile(jsFile)).toThrow(BadRequestException);
+      for (const name of dangerousNames) {
+        const file = { originalname: name, size: 1000, mimetype: 'application/octet-stream' } as any;
+        expect(() => validateUploadedFile(file)).toThrow(BadRequestException);
+      }
     });
 
     it('should reject files exceeding max allowed size', () => {
@@ -183,5 +189,11 @@ describe('ResourcesService & File Validator', () => {
       const otherUser = { userId: 'user-999', email: 'other@test.com', role: 'TEACHER' as const, teacherId: 'teacher-999' };
       await expect(service.getFileForDownload('res-1', otherUser)).rejects.toThrow(ForbiddenException);
     });
+
+    it('should prevent other teachers from deleting resource (403 Forbidden)', async () => {
+      const otherUser = { userId: 'user-999', email: 'other@test.com', role: 'TEACHER' as const, teacherId: 'teacher-999' };
+      await expect(service.remove('res-1', otherUser)).rejects.toThrow(ForbiddenException);
+    });
   });
 });
+

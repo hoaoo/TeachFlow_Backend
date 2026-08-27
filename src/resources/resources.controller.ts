@@ -100,9 +100,10 @@ export class ResourcesController {
     const fileSize = stat.size;
     const range = req.headers.range;
 
-    const ext = fileKey.split('.').pop() || 'dat';
-    const baseWithoutExt = fileKey.replace(/\.[^.]+$/, '');
+    const ext = (fileInfo.originalFileName || fileKey).split('.').pop() || 'dat';
+    const baseWithoutExt = (fileInfo.originalFileName || fileKey).replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
+    const contentType = fileInfo.mimeType || 'application/octet-stream';
 
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -115,14 +116,14 @@ export class ResourcesController {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
-        'Content-Type': 'application/octet-stream',
+        'Content-Type': contentType,
         'Content-Disposition': buildContentDisposition(asciiFilename, utf8Filename, 'inline'),
       });
       return file.pipe(res);
     } else {
       res.writeHead(HttpStatus.OK, {
         'Content-Length': fileSize,
-        'Content-Type': 'application/octet-stream',
+        'Content-Type': contentType,
         'Accept-Ranges': 'bytes',
         'Content-Disposition': buildContentDisposition(asciiFilename, utf8Filename, 'inline'),
       });
@@ -235,27 +236,47 @@ export class ResourcesController {
   @Get(':id/file')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
-  @ApiOperation({ summary: 'Xem trực tiếp tập tin (inline preview)' })
+  @ApiOperation({ summary: 'Xem trực tiếp tập tin (inline preview / streaming)' })
   async viewFile(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
     const fileInfo = await this.resourcesService.getFileForDownload(id, user);
+    const stat = fs.statSync(fileInfo.filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
 
     const ext = fileInfo.originalFileName.split('.').pop() || 'dat';
     const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
+    const contentType = fileInfo.mimeType || 'application/octet-stream';
 
-    res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', buildContentDisposition(asciiFilename, utf8Filename, 'inline'));
-    res.setHeader('Accept-Ranges', 'bytes');
-    if (fileInfo.size) {
-      res.setHeader('Content-Length', fileInfo.size);
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      const file = fs.createReadStream(fileInfo.filePath, { start, end });
+
+      res.writeHead(HttpStatus.PARTIAL_CONTENT, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': contentType,
+        'Content-Disposition': buildContentDisposition(asciiFilename, utf8Filename, 'inline'),
+      });
+      return file.pipe(res);
+    } else {
+      res.writeHead(HttpStatus.OK, {
+        'Content-Length': fileSize,
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': buildContentDisposition(asciiFilename, utf8Filename, 'inline'),
+      });
+      return fs.createReadStream(fileInfo.filePath).pipe(res);
     }
-
-    const stream = fs.createReadStream(fileInfo.filePath);
-    return stream.pipe(res);
   }
 
   @Post()
