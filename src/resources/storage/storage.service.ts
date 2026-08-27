@@ -201,14 +201,16 @@ export class StorageService {
   /**
    * Persist a generated (or already-in-memory) buffer. Never writes outside uploadDir.
    */
-  async saveBuffer(buffer: Buffer, originalExt: string): Promise<StoredFileResult> {
+  async saveBuffer(buffer: Buffer, originalExt: string, customFileName?: string): Promise<StoredFileResult> {
     this.ensureDirectoryExists();
     if (!buffer || buffer.length === 0) {
       throw new Error('File content is empty or invalid');
     }
 
     const cleanExt = originalExt.startsWith('.') ? originalExt : `.${originalExt}`;
-    const storedFileName = `${crypto.randomUUID()}${cleanExt.toLowerCase()}`;
+    const storedFileName = customFileName
+      ? path.basename(customFileName)
+      : `${crypto.randomUUID()}${cleanExt.toLowerCase()}`;
     const fullPath = path.join(this.uploadDir, storedFileName);
 
     if (!fullPath.startsWith(this.uploadDir)) {

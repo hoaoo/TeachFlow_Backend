@@ -279,6 +279,52 @@ export class ResourcesController {
     }
   }
 
+  @Get(':id/preview')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Xem bản xem trước (preview PDF cho PPTX hoặc media inline)' })
+  async viewPreview(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const fileInfo = await this.resourcesService.getPreviewFile(id, user);
+    const stat = fs.statSync(fileInfo.filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    const ext = fileInfo.originalFileName.split('.').pop() || 'pdf';
+    const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
+    const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
+    const contentType = fileInfo.mimeType || 'application/pdf';
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      const file = fs.createReadStream(fileInfo.filePath, { start, end });
+
+      res.writeHead(HttpStatus.PARTIAL_CONTENT, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': contentType,
+        'Content-Disposition': buildContentDisposition(asciiFilename, utf8Filename, 'inline'),
+      });
+      return file.pipe(res);
+    } else {
+      res.writeHead(HttpStatus.OK, {
+        'Content-Length': fileSize,
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': buildContentDisposition(asciiFilename, utf8Filename, 'inline'),
+      });
+      return fs.createReadStream(fileInfo.filePath).pipe(res);
+    }
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')

@@ -20,6 +20,7 @@ import {
   ResourceSignedUrlDto,
 } from './dto/presign-upload.dto';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { PreviewService } from './preview.service';
 
 @Injectable()
 export class ResourcesService {
@@ -29,6 +30,7 @@ export class ResourcesService {
     private prisma: PrismaService,
     private storageService: StorageService,
     private configService: ConfigService,
+    private previewService: PreviewService,
   ) {}
 
   private async getTeacherId(user: AuthenticatedUser): Promise<string> {
@@ -111,6 +113,14 @@ export class ResourcesService {
     this.logger.log(
       `Resource complete-upload: id=${resource.id} teacherId=${teacherId} size=${size} type=${resourceType}`,
     );
+
+    if (['.ppt', '.pptx'].includes(ext)) {
+      this.previewService.processResourcePreview(
+        resource.id,
+        resource.storagePath || this.storageService.getSafeFilePath(storedFileName),
+        resource.originalFileName || resource.name,
+      ).catch((err) => this.logger.error(`Background preview error: ${err.message}`));
+    }
 
     return this.mapResourceResponse(resource);
   }
@@ -258,6 +268,14 @@ export class ResourcesService {
     this.logger.log(
       `Resource uploaded: id=${resource.id} teacherId=${teacherId} size=${stored.size} type=${validation.resourceType}`,
     );
+
+    if (['.ppt', '.pptx'].includes(validation.extension.toLowerCase())) {
+      this.previewService.processResourcePreview(
+        resource.id,
+        stored.storagePath,
+        validation.sanitizedOriginalName,
+      ).catch((err) => this.logger.error(`Background preview error: ${err.message}`));
+    }
 
     return this.mapResourceResponse(resource);
   }
@@ -495,6 +513,35 @@ export class ResourcesService {
   }
 
   /**
+   * Get preview file path (converted PDF for PPTX, or original for other media)
+   */
+  async getPreviewFile(id: string, user: AuthenticatedUser) {
+    const resource = await this.findOne(id, user);
+
+    if (resource.previewStatus === 'READY' && resource.previewStorageKey) {
+      const exists = await this.storageService.fileExists(resource.previewStorageKey);
+      if (exists) {
+        const filePath = this.storageService.getSafeFilePath(resource.previewStorageKey);
+        const stats = await this.storageService.getFileStats(resource.previewStorageKey);
+        const baseName = (resource.originalFileName || resource.name).replace(/\.[^.]+$/, '');
+        return {
+          filePath,
+          originalFileName: `${baseName}_preview.pdf`,
+          mimeType: 'application/pdf',
+          size: stats?.size || 0,
+        };
+      }
+    }
+
+    if (resource.previewStatus === 'PENDING') {
+      throw new BadRequestException('Bản xem trước đang được khởi tạo, vui lòng thử lại sau giây lát');
+    }
+
+    // Fallback to original file
+    return this.getFileForDownload(id, user);
+  }
+
+  /**
    * Soft delete database record and delete physical file
    */
   async remove(id: string, user: AuthenticatedUser) {
@@ -519,6 +566,9 @@ export class ResourcesService {
     if (res.storedFileName) {
       await this.storageService.deleteFile(res.storedFileName);
     }
+    if (res.previewStorageKey) {
+      await this.storageService.deleteFile(res.previewStorageKey);
+    }
 
     return { success: true, message: 'Đã xóa tài nguyên thành công' };
   }
@@ -529,26 +579,31 @@ export class ResourcesService {
 
     return {
       id: r.id,
-      name: r.name || r.title,
-      title: r.title || r.name,
-      originalFileName: r.originalFileName,
-      storedFileName: r.storedFileName,
+      name: r.name || r.title || 'Tài nguyên chưa đặt tên',
+      title: r.title || r.name || 'Tài nguyên chưa đặt tên',
+      originalFileName: r.originalFileName || null,
+      storedFileName: r.storedFileName || null,
       resourceType: r.resourceType || 'DOCUMENT',
-      mimeType: r.mimeType,
-      size: r.size,
+      mimeType: r.mimeType || null,
+      size: r.size || 0,
       formattedSize,
       extension,
-      subjectId: r.subjectId,
+      subjectId: r.subjectId || null,
       subjectName: r.subject?.name || null,
-      gradeId: r.gradeId,
+      gradeId: r.gradeId || null,
       gradeName: r.grade?.name || null,
-      lessonId: r.lessonId,
+      lessonId: r.lessonId || null,
       lessonTitle: r.lesson?.title || null,
       subtitle: r.subtitle || `${r.subject?.name || 'Học liệu'} · ${r.grade?.name || 'Tiểu học'}`,
-      description: r.description,
+      description: r.description || null,
       status: r.status || 'ACTIVE',
       meta: r.meta || `${formattedSize} · ${extension || 'DOC'}`,
       tone: r.tone || 'teal',
+      previewStatus: r.previewStatus || 'NONE',
+      previewStorageKey: r.previewStorageKey || null,
+      previewMimeType: r.previewMimeType || null,
+      previewGeneratedAt: r.previewGeneratedAt || null,
+      previewError: r.previewError || null,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
     };

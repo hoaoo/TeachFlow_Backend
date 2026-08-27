@@ -854,6 +854,11 @@ model TeachingResource {
   status           String?   @default("ACTIVE")
   meta             String?
   tone             String?   @default("teal")
+  previewStatus    String?   @default("NONE") // NONE, PENDING, READY, FAILED
+  previewStorageKey String?
+  previewMimeType   String?
+  previewGeneratedAt DateTime?
+  previewError      String?  @db.Text
   deletedAt        DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

@@ -14,6 +14,7 @@ import { HomeroomExportService } from '../export/homeroom-export.service';
 import { ReportsService } from '../reports/reports.service';
 import { TeachingPlansService } from '../teaching-plans/teaching-plans.service';
 import { StorageService } from '../resources/storage/storage.service';
+import { PreviewService } from '../resources/preview.service';
 import { TeachingAssignmentAuthorizationService } from './services/teaching-assignment-authorization.service';
 import { AcademicCalculationService } from '../assessments/academic-calculation.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -140,6 +141,12 @@ describe('Cross-Teacher IDOR Absolute Data Isolation Test Suite', () => {
             getFileStream: jest.fn(),
             deleteFile: jest.fn(),
             saveFile: jest.fn(),
+          },
+        },
+        {
+          provide: PreviewService,
+          useValue: {
+            processResourcePreview: jest.fn().mockResolvedValue(undefined),
           },
         },
         { provide: PrismaService, useValue: mockPrisma },

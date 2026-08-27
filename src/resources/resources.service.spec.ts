@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NotFoundException, ForbiddenException, BadRequestException, PayloadTooLargeException } from '@nestjs/common';
 import { ResourcesService } from './resources.service';
 import { StorageService } from './storage/storage.service';
+import { PreviewService } from './preview.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { validateUploadedFile } from './resources.validator';
 
@@ -38,6 +39,12 @@ describe('ResourcesService & File Validator', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ResourcesService,
+        {
+          provide: PreviewService,
+          useValue: {
+            processResourcePreview: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         {
           provide: StorageService,
           useValue: {

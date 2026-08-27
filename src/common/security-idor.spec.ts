@@ -16,6 +16,7 @@ import { ExportService } from '../export/export.service';
 import { LessonPlanExportService } from '../export/lesson-plan-export.service';
 import { WorksheetExportService } from '../export/worksheet-export.service';
 import { StorageService } from '../resources/storage/storage.service';
+import { PreviewService } from '../resources/preview.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 
@@ -147,6 +148,12 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
             getSafeFilePath: jest.fn(),
             fileExists: jest.fn(),
             deleteFile: jest.fn(),
+          },
+        },
+        {
+          provide: PreviewService,
+          useValue: {
+            processResourcePreview: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
