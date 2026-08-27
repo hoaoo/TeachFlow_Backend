@@ -3,6 +3,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 
 export interface SearchResult {
+  classrooms: Array<{
+    id: string;
+    name: string;
+    gradeName: string | null;
+    isHomeroom: boolean;
+    type: 'CLASSROOM';
+  }>;
   students: Array<{
     id: string;
     fullName: string;
@@ -64,6 +71,7 @@ export class SearchService {
     const limit = Math.min(Math.max(1, query.limit || 5), 20);
 
     const emptyResult: SearchResult = {
+      classrooms: [],
       students: [],
       lessonPlans: [],
       worksheets: [],
@@ -90,7 +98,7 @@ export class SearchService {
     const keyword = rawKeyword;
 
     try {
-      const [students, lessonPlans, worksheets, resources] = await Promise.all([
+      const [students, lessonPlans, worksheets, resources, classrooms] = await Promise.all([
         // 1. Search Students scoped by Teacher's Classrooms
         this.prisma.student.findMany({
           where: {
@@ -210,9 +218,33 @@ export class SearchService {
           },
           orderBy: { updatedAt: 'desc' },
         }),
+        // 5. Search Classrooms scoped by Teacher
+        this.prisma.classroom.findMany({
+          where: {
+            deletedAt: null,
+            isActive: true,
+            name: { contains: keyword, mode: 'insensitive' },
+            OR: [{ teacherId }, { homeroomTeacherId: teacherId }],
+          },
+          take: limit,
+          select: {
+            id: true,
+            name: true,
+            homeroomTeacherId: true,
+            grade: { select: { name: true } },
+          },
+          orderBy: { name: 'asc' },
+        }),
       ]);
 
       return {
+        classrooms: classrooms.map((classroom) => ({
+          id: classroom.id,
+          name: classroom.name,
+          gradeName: classroom.grade?.name || null,
+          isHomeroom: classroom.homeroomTeacherId === teacherId,
+          type: 'CLASSROOM',
+        })),
         students: students.map((s) => {
           const enrollment = s.studentEnrollments?.[0];
           return {
