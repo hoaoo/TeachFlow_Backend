@@ -4,12 +4,13 @@ import {
   ForbiddenException,
   BadRequestException,
   UnauthorizedException,
+  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
-import { StorageService } from './storage/storage.service';
+import { StorageService, StoredFileResult } from './storage/storage.service';
 import { determineResourceType, validateUploadedFile, MIME_TYPE_MAP } from './resources.validator';
 import { UploadResourceDto } from './dto/upload-resource.dto';
 import { CreateResourceDto, UpdateResourceDto } from './dto/create-resource.dto';
@@ -235,49 +236,74 @@ export class ResourcesService {
   ) {
     const teacherId = await this.getTeacherId(user);
     const validation = validateUploadedFile(file, undefined, undefined, this.configService);
-    const stored = await this.storageService.saveFile(file, validation.extension);
+
+    let stored: StoredFileResult | null = null;
+    try {
+      stored = await this.storageService.saveFile(file, validation.extension);
+    } catch (err: any) {
+      if (err instanceof BadRequestException || err instanceof ForbiddenException) {
+        throw err;
+      }
+      this.logger.error(
+        `Storage write failed for teacherId=${teacherId} file=${validation.sanitizedOriginalName}: ${err?.message}`,
+        err?.stack,
+      );
+      throw new InternalServerErrorException('Không thể lưu tập tin vào hệ thống lưu trữ');
+    }
 
     const displayName = dto.name?.trim() || validation.sanitizedOriginalName;
 
-    const resource = await this.prisma.teachingResource.create({
-      data: {
-        teacherId,
-        name: displayName,
-        title: displayName,
-        originalFileName: validation.sanitizedOriginalName,
-        storedFileName: stored.storedFileName,
-        storagePath: stored.storagePath,
-        mimeType: file.mimetype || 'application/octet-stream',
-        size: stored.size,
-        resourceType: validation.resourceType,
-        subjectId: dto.subjectId || null,
-        gradeId: dto.gradeId || null,
-        lessonId: dto.lessonId || null,
-        description: dto.description || null,
-        status: 'ACTIVE',
-        meta: `${this.formatFileSize(stored.size)} · ${validation.extension.toUpperCase().replace('.', '')}`,
-        tone: dto.tone || 'teal',
-      },
-      include: {
-        subject: true,
-        grade: true,
-        lesson: true,
-      },
-    });
+    try {
+      const resource = await this.prisma.teachingResource.create({
+        data: {
+          teacherId,
+          name: displayName,
+          title: displayName,
+          originalFileName: validation.sanitizedOriginalName,
+          storedFileName: stored.storedFileName,
+          storagePath: stored.storagePath,
+          mimeType: file.mimetype || 'application/octet-stream',
+          size: stored.size,
+          resourceType: validation.resourceType,
+          subjectId: dto.subjectId || null,
+          gradeId: dto.gradeId || null,
+          lessonId: dto.lessonId || null,
+          description: dto.description || null,
+          status: 'ACTIVE',
+          meta: `${this.formatFileSize(stored.size)} · ${validation.extension.toUpperCase().replace('.', '')}`,
+          tone: dto.tone || 'teal',
+        },
+        include: {
+          subject: true,
+          grade: true,
+          lesson: true,
+        },
+      });
 
-    this.logger.log(
-      `Resource uploaded: id=${resource.id} teacherId=${teacherId} size=${stored.size} type=${validation.resourceType}`,
-    );
+      this.logger.log(
+        `Resource uploaded: id=${resource.id} teacherId=${teacherId} size=${stored.size} type=${validation.resourceType}`,
+      );
 
-    if (['.ppt', '.pptx'].includes(validation.extension.toLowerCase())) {
-      this.previewService.processResourcePreview(
-        resource.id,
-        stored.storagePath,
-        validation.sanitizedOriginalName,
-      ).catch((err) => this.logger.error(`Background preview error: ${err.message}`));
+      if (['.ppt', '.pptx'].includes(validation.extension.toLowerCase())) {
+        this.previewService.processResourcePreview(
+          resource.id,
+          stored.storagePath,
+          validation.sanitizedOriginalName,
+        ).catch((err) => this.logger.error(`Background preview error: ${err.message}`));
+      }
+
+      return this.mapResourceResponse(resource);
+    } catch (dbErr: any) {
+      this.logger.error(
+        `Database insertion failed for resource upload (teacherId=${teacherId}, storedFileName=${stored.storedFileName}): ${dbErr?.message}`,
+        dbErr?.stack,
+      );
+      // Clean up physical file on database failure
+      if (stored?.storedFileName) {
+        await this.storageService.deleteFile(stored.storedFileName).catch(() => {});
+      }
+      throw new InternalServerErrorException('Không thể lưu thông tin tài nguyên vào cơ sở dữ liệu');
     }
-
-    return this.mapResourceResponse(resource);
   }
 
   /**

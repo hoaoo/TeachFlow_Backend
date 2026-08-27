@@ -1,4 +1,10 @@
-import { Injectable, Logger, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  UnauthorizedException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -27,9 +33,13 @@ export class StorageService {
   }
 
   private ensureDirectoryExists(): void {
-    if (!fs.existsSync(this.uploadDir)) {
-      fs.mkdirSync(this.uploadDir, { recursive: true });
-      this.logger.log(`Created uploads directory at: ${this.uploadDir}`);
+    try {
+      if (!fs.existsSync(this.uploadDir)) {
+        fs.mkdirSync(this.uploadDir, { recursive: true });
+        this.logger.log(`Created uploads directory at: ${this.uploadDir}`);
+      }
+    } catch (err: any) {
+      this.logger.error(`Failed to ensure upload directory (${this.uploadDir}): ${err?.message}`);
     }
   }
 
@@ -172,29 +182,41 @@ export class StorageService {
   async saveFile(file: Express.Multer.File, originalExt: string): Promise<StoredFileResult> {
     this.ensureDirectoryExists();
 
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn tập tin tải lên');
+    }
+
     const cleanExt = originalExt.startsWith('.') ? originalExt : `.${originalExt}`;
     const storedFileName = `${crypto.randomUUID()}${cleanExt.toLowerCase()}`;
     const fullPath = path.join(this.uploadDir, storedFileName);
 
     // Verify no path traversal outside uploadDir
     if (!fullPath.startsWith(this.uploadDir)) {
-      throw new Error('Path traversal detected');
+      throw new BadRequestException('Đường dẫn lưu trữ tập tin không hợp lệ');
     }
 
-    if (file.buffer) {
-      await fs.promises.writeFile(fullPath, file.buffer);
-    } else if (file.path && fs.existsSync(file.path)) {
-      await fs.promises.copyFile(file.path, fullPath);
-      // Clean up multer temporary file if present
-      fs.unlink(file.path, () => {});
-    } else {
-      throw new Error('File content is empty or invalid');
+    try {
+      if (file.buffer && file.buffer.length > 0) {
+        await fs.promises.writeFile(fullPath, file.buffer);
+      } else if (file.path && fs.existsSync(file.path)) {
+        await fs.promises.copyFile(file.path, fullPath);
+        // Clean up multer temporary file if present
+        fs.unlink(file.path, () => {});
+      } else {
+        throw new BadRequestException('Nội dung tập tin tải lên không hợp lệ hoặc rỗng');
+      }
+    } catch (err: any) {
+      if (err instanceof BadRequestException) {
+        throw err;
+      }
+      this.logger.error(`Storage disk write failure for file ${storedFileName}: ${err?.message}`, err?.stack);
+      throw new InternalServerErrorException('Không thể ghi tập tin lên hệ thống lưu trữ');
     }
 
     return {
       storedFileName,
       storagePath: fullPath,
-      size: file.size,
+      size: file.size || (file.buffer ? file.buffer.length : 0),
     };
   }
 
@@ -204,7 +226,7 @@ export class StorageService {
   async saveBuffer(buffer: Buffer, originalExt: string, customFileName?: string): Promise<StoredFileResult> {
     this.ensureDirectoryExists();
     if (!buffer || buffer.length === 0) {
-      throw new Error('File content is empty or invalid');
+      throw new BadRequestException('Nội dung dữ liệu không hợp lệ hoặc rỗng');
     }
 
     const cleanExt = originalExt.startsWith('.') ? originalExt : `.${originalExt}`;
@@ -214,10 +236,16 @@ export class StorageService {
     const fullPath = path.join(this.uploadDir, storedFileName);
 
     if (!fullPath.startsWith(this.uploadDir)) {
-      throw new Error('Path traversal detected');
+      throw new BadRequestException('Đường dẫn lưu trữ tập tin không hợp lệ');
     }
 
-    await fs.promises.writeFile(fullPath, buffer);
+    try {
+      await fs.promises.writeFile(fullPath, buffer);
+    } catch (err: any) {
+      this.logger.error(`Storage buffer write failure for ${storedFileName}: ${err?.message}`, err?.stack);
+      throw new InternalServerErrorException('Không thể ghi dữ liệu tập tin lên hệ thống lưu trữ');
+    }
+
     return {
       storedFileName,
       storagePath: fullPath,

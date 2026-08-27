@@ -15,6 +15,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
@@ -170,6 +171,9 @@ export class ResourcesController {
     @Body() dto: UploadResourceDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn tập tin tải lên');
+    }
     return this.resourcesService.uploadResource(file, dto, user);
   }
 
