@@ -10,6 +10,7 @@ import helmet from 'helmet';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { validateEnvironment } from './config/env.validation';
+import { getCorsOptions } from './config/cors.config';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -58,34 +59,7 @@ async function bootstrap() {
 
   // 7. CORS Configuration (Strict origin allowlist in production)
   const rawFrontendUrls = configService.get<string>('FRONTEND_URL') || env.FRONTEND_URL || '';
-  const configuredFrontendUrls = rawFrontendUrls
-    .split(',')
-    .map((url) => url.trim().replace(/\/+$/, ''))
-    .filter(Boolean);
-
-  const defaultOrigins = isProd
-    ? ['https://teachflow-fontend.onrender.com']
-    : ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://teachflow-fontend.onrender.com'];
-
-  const allowedOrigins = Array.from(new Set([...defaultOrigins, ...configuredFrontendUrls]));
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. server-to-server, curl, healthcheck)
-      if (!origin) {
-        return callback(null, true);
-      }
-      const normalizedOrigin = origin.replace(/\/+$/, '');
-      if (allowedOrigins.includes(normalizedOrigin)) {
-        return callback(null, true);
-      }
-      logger.warn(`CORS rejected origin: "${origin}". Allowed origins: ${JSON.stringify(allowedOrigins)}`);
-      return callback(new Error(`CORS Error: Origin ${origin} is not allowed by CORS policy`), false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Forwarded-For'],
-  });
+  app.enableCors(getCorsOptions(isProd, rawFrontendUrls, (message) => logger.warn(message)));
 
   // 8. Global ValidationPipe
   app.useGlobalPipes(
