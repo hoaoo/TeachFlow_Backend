@@ -2,11 +2,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { StudentEnrollmentsService } from './student-enrollments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EnrollmentStatus } from '@prisma/client';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 
 describe('StudentEnrollmentsService (Phase 3)', () => {
   let service: StudentEnrollmentsService;
@@ -109,6 +111,10 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
     $queryRaw: jest.fn(),
   };
 
+  const mockClassroomAccess = {
+    assertAuthenticatedHomeroomTeacher: jest.fn().mockResolvedValue(mockClassroom4A),
+  };
+
   beforeEach(async () => {
     jest.resetAllMocks();
     mockPrisma.$transaction.mockImplementation(async (cb: any) => {
@@ -117,11 +123,19 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
       }
       return cb;
     });
+    mockPrisma.studentEnrollment.findUnique.mockResolvedValue({
+      classroomId: mockClassroom4A.id,
+    });
+    mockClassroomAccess.assertAuthenticatedHomeroomTeacher.mockResolvedValue(mockClassroom4A);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StudentEnrollmentsService,
         { provide: PrismaService, useValue: mockPrisma },
+        {
+          provide: TeachingAssignmentAuthorizationService,
+          useValue: mockClassroomAccess,
+        },
       ],
     }).compile();
 
@@ -143,7 +157,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
         studentId: 'student-1',
         schoolYearId: 'sy-2026',
         classroomId: 'class-4a',
-      });
+      }, 'teacher-1');
 
       expect(result).toBeDefined();
       expect(result.id).toBe('enrollment-1');
@@ -161,7 +175,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
           studentId: 'student-1',
           schoolYearId: 'sy-2026',
           classroomId: 'class-5a-2027',
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -176,7 +190,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
           studentId: 'student-1',
           schoolYearId: 'sy-2026',
           classroomId: 'class-4a',
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -189,12 +203,31 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
           studentId: 'student-1',
           schoolYearId: 'sy-2024',
           classroomId: 'class-4a',
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(BadRequestException);
     });
   });
 
   describe('transfer', () => {
+    it('returns 403 before mutating a cross-teacher enrollmentId', async () => {
+      mockPrisma.studentEnrollment.findUnique.mockResolvedValueOnce({
+        classroomId: 'class-owned-by-other-teacher',
+      });
+      mockClassroomAccess.assertAuthenticatedHomeroomTeacher.mockRejectedValueOnce(
+        new ForbiddenException('Homeroom teacher required'),
+      );
+
+      await expect(
+        service.transfer(
+          'cross-teacher-enrollment',
+          { targetClassroomId: 'class-4b' },
+          'teacher-1',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
+      expect(mockPrisma.studentEnrollment.update).not.toHaveBeenCalled();
+    });
+
     it('should successfully transfer student to new class in the same school year without overwriting history', async () => {
       mockPrisma.$queryRaw.mockResolvedValueOnce([mockActiveEnrollment]);
       mockPrisma.classroom.findUnique.mockResolvedValueOnce(mockClassroom4B);
@@ -222,7 +255,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
         targetClassroomId: 'class-4b',
         transferDate: '2026-11-16T00:00:00.000Z',
         reason: 'Chuyển lớp theo nguyện vọng phụ huynh',
-      });
+      }, 'teacher-1');
 
       expect(result).toBeDefined();
       expect(result.id).toBe('enrollment-2');
@@ -256,7 +289,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
       await expect(
         service.transfer('enrollment-1', {
           targetClassroomId: 'class-4a',
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -267,7 +300,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
       await expect(
         service.transfer('enrollment-1', {
           targetClassroomId: 'class-5a-2027',
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -279,7 +312,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
       await expect(
         service.transfer('enrollment-1', {
           targetClassroomId: 'class-4b',
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -291,7 +324,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
         service.transfer('enrollment-1', {
           targetClassroomId: 'class-4b',
           transferDate: '2026-08-01T00:00:00.000Z', // earlier than 2026-09-05
-        }),
+        }, 'teacher-1'),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -310,7 +343,7 @@ describe('StudentEnrollmentsService (Phase 3)', () => {
       const result = await service.withdraw('enrollment-1', {
         withdrawDate: '2026-12-01T00:00:00.000Z',
         reason: 'Chuyển trường',
-      });
+      }, 'teacher-1');
 
       expect(result.status).toBe(EnrollmentStatus.WITHDRAWN);
       expect(mockPrisma.studentEnrollment.update).toHaveBeenCalledWith({

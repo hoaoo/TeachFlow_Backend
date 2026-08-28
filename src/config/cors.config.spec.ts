@@ -4,6 +4,7 @@ import * as request from 'supertest';
 import {
   getAllowedCorsOrigins,
   getCorsOptions,
+  TAURI_DEV_ORIGIN,
   TAURI_WINDOWS_ORIGIN,
   WEB_PRODUCTION_ORIGIN,
 } from './cors.config';
@@ -13,6 +14,7 @@ describe('getAllowedCorsOrigins', () => {
     expect(getAllowedCorsOrigins(true)).toEqual([
       WEB_PRODUCTION_ORIGIN,
       TAURI_WINDOWS_ORIGIN,
+      TAURI_DEV_ORIGIN,
     ]);
   });
 
@@ -31,6 +33,7 @@ describe('getAllowedCorsOrigins', () => {
     ).toEqual([
       WEB_PRODUCTION_ORIGIN,
       TAURI_WINDOWS_ORIGIN,
+      TAURI_DEV_ORIGIN,
       'https://school.example.com',
     ]);
   });
@@ -46,6 +49,20 @@ describe('getAllowedCorsOrigins', () => {
     }
 
     origin(TAURI_WINDOWS_ORIGIN, (error, allowed) => {
+      expect(error).toBeNull();
+      expect(allowed).toBe(true);
+      done();
+    });
+  });
+
+  it('accepts the exact localhost origin used by tauri dev', (done) => {
+    const origin = getCorsOptions(true).origin;
+
+    if (typeof origin !== 'function') {
+      return done.fail('Expected a CORS origin callback');
+    }
+
+    origin(TAURI_DEV_ORIGIN, (error, allowed) => {
       expect(error).toBeNull();
       expect(allowed).toBe(true);
       done();

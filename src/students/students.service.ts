@@ -398,7 +398,7 @@ export class StudentsService {
     let classId = dto.classroomId || dto.classId;
     if (!classId && teacherId) {
       const teacherClass = await this.prisma.classroom.findFirst({
-        where: { teacherId, deletedAt: null },
+        where: { homeroomTeacherId: teacherId, deletedAt: null },
         orderBy: { createdAt: 'desc' },
       });
       if (teacherClass) {
@@ -417,6 +417,8 @@ export class StudentsService {
     if (!classroom || classroom.deletedAt) {
       throw new NotFoundException('Không tìm thấy lớp học');
     }
+
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(classId, teacherId);
 
     // Verify teacher permission
     if (teacherId && classroom.teacherId !== teacherId) {
@@ -542,7 +544,8 @@ export class StudentsService {
   }
 
   async update(id: string, dto: UpdateStudentDto, teacherId: string) {
-    await this.findOne(id, teacherId);
+    const student = await this.findOne(id, teacherId);
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(student.classId, teacherId);
 
     const data: any = {};
     if (dto.fullName) data.fullName = dto.fullName.trim();
@@ -587,16 +590,17 @@ export class StudentsService {
 
   async remove(id: string, teacherId: string) {
     const student = await this.findOne(id, teacherId);
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(student.classId, teacherId);
 
     return this.prisma.$transaction(async (tx) => {
       // Close active enrollments
       await tx.studentEnrollment.updateMany({
-        where: { studentId: id, status: 'ACTIVE' },
+        where: { studentId: id, classroomId: student.classId, status: 'ACTIVE' },
         data: { status: 'WITHDRAWN', leftAt: new Date() },
       });
 
       await tx.classStudent.updateMany({
-        where: { studentId: id, status: 'ACTIVE' },
+        where: { studentId: id, classroomId: student.classId, status: 'ACTIVE' },
         data: { status: 'INACTIVE', leftAt: new Date() },
       });
 
@@ -614,6 +618,11 @@ export class StudentsService {
 
   async transferStudent(id: string, dto: TransferStudentDto, teacherId: string) {
     const student = await this.findOne(id, teacherId);
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(student.classId, teacherId);
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(
+      dto.targetClassroomId,
+      teacherId,
+    );
 
     const targetClassroom = await this.prisma.classroom.findUnique({
       where: { id: dto.targetClassroomId },
@@ -633,7 +642,7 @@ export class StudentsService {
     return this.prisma.$transaction(async (tx) => {
       // 1. Close old active enrollments
       await tx.studentEnrollment.updateMany({
-        where: { studentId: id, status: 'ACTIVE' },
+        where: { studentId: id, classroomId: student.classId, status: 'ACTIVE' },
         data: {
           status: 'TRANSFERRED',
           leftAt: new Date(),
@@ -643,7 +652,7 @@ export class StudentsService {
 
       // 2. Update old classStudent
       await tx.classStudent.updateMany({
-        where: { studentId: id, status: 'ACTIVE' },
+        where: { studentId: id, classroomId: student.classId, status: 'ACTIVE' },
         data: { status: 'TRANSFERRED', leftAt: new Date() },
       });
 
@@ -715,6 +724,8 @@ export class StudentsService {
     if (!classroom || classroom.deletedAt) {
       throw new NotFoundException('Lớp học không tồn tại hoặc đã bị xóa');
     }
+
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(classroomId, teacherId);
 
     if (teacherId) {
       const accessibleClassIds = await this.classroomAccess.getAccessibleClassroomIds(teacherId);

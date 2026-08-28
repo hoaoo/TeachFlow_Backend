@@ -1,6 +1,7 @@
 import { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 
 export const TAURI_WINDOWS_ORIGIN = 'http://tauri.localhost';
+export const TAURI_DEV_ORIGIN = 'http://localhost:3000';
 export const WEB_PRODUCTION_ORIGIN = 'https://teachflow-fontend.onrender.com';
 
 export function getAllowedCorsOrigins(isProd: boolean, rawFrontendUrls = ''): string[] {
@@ -10,7 +11,7 @@ export function getAllowedCorsOrigins(isProd: boolean, rawFrontendUrls = ''): st
     .filter(Boolean);
 
   const defaultOrigins = isProd
-    ? [WEB_PRODUCTION_ORIGIN, TAURI_WINDOWS_ORIGIN]
+    ? [WEB_PRODUCTION_ORIGIN, TAURI_WINDOWS_ORIGIN, TAURI_DEV_ORIGIN]
     : [
         'http://localhost:3000',
         'http://127.0.0.1:3000',

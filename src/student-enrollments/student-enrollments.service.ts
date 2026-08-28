@@ -13,6 +13,7 @@ import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { TransferEnrollmentDto } from './dto/transfer-enrollment.dto';
 import { WithdrawEnrollmentDto } from './dto/withdraw-enrollment.dto';
 import { EnrollmentStatus } from '@prisma/client';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 
 @Injectable()
 export class StudentEnrollmentsService {
@@ -20,6 +21,7 @@ export class StudentEnrollmentsService {
 
   constructor(
     private prisma: PrismaService,
+    private classroomAccess: TeachingAssignmentAuthorizationService,
     @Optional() private auditService?: AuditService,
   ) {}
 
@@ -158,9 +160,10 @@ export class StudentEnrollmentsService {
       );
     }
 
-    if (currentTeacherId && classroom.teacherId !== currentTeacherId) {
-      throw new ForbiddenException('Bạn không có quyền ghi danh học sinh vào lớp học này');
-    }
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(
+      dto.classroomId,
+      currentTeacherId,
+    );
 
     // 5. Check if active enrollment already exists in this school year (pre-check for clean error)
     const existingActive = await this.prisma.studentEnrollment.findFirst({
@@ -250,6 +253,22 @@ export class StudentEnrollmentsService {
   async transfer(id: string, dto: TransferEnrollmentDto, currentTeacherId?: string) {
     const transferDate = dto.transferDate ? new Date(dto.transferDate) : new Date();
 
+    const enrollment = await this.prisma.studentEnrollment.findUnique({
+      where: { id },
+      select: { classroomId: true },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(`Không tìm thấy thông tin ghi danh với mã ${id}`);
+    }
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(
+      enrollment.classroomId,
+      currentTeacherId,
+    );
+    await this.classroomAccess.assertAuthenticatedHomeroomTeacher(
+      dto.targetClassroomId,
+      currentTeacherId,
+    );
+
     try {
       return await this.prisma.$transaction(async (tx) => {
         // 1. Lock and load source enrollment
@@ -269,16 +288,6 @@ export class StudentEnrollmentsService {
           throw new BadRequestException(
             `Không thể chuyển lớp cho bản ghi ghi danh có trạng thái "${source.status}". Chỉ bản ghi ACTIVE mới có thể chuyển lớp.`,
           );
-        }
-
-        if (currentTeacherId) {
-          const sourceClassroom = await tx.classroom.findUnique({
-            where: { id: source.classroomId },
-          });
-
-          if (sourceClassroom?.teacherId !== currentTeacherId) {
-            throw new ForbiddenException('Bạn không có quyền chuyển học sinh từ lớp học này');
-          }
         }
 
         // 2. Validate target classroom
@@ -422,9 +431,10 @@ export class StudentEnrollmentsService {
         throw new NotFoundException(`Không tìm thấy thông tin ghi danh với mã ${id}`);
       }
 
-      if (currentTeacherId && source.classroom.teacherId !== currentTeacherId) {
-        throw new ForbiddenException('Bạn không có quyền rút học sinh khỏi lớp học này');
-      }
+      await this.classroomAccess.assertAuthenticatedHomeroomTeacher(
+        source.classroomId,
+        currentTeacherId,
+      );
 
       if (source.status !== EnrollmentStatus.ACTIVE) {
         throw new BadRequestException(

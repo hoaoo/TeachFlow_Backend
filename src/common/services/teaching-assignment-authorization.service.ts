@@ -84,6 +84,21 @@ export class TeachingAssignmentAuthorizationService {
   }
 
   /**
+   * Roster mutations are teacher-only and require the authenticated teacher to
+   * be the current homeroom teacher. Unlike the general access helper, a missing
+   * teacher identity must never mean a system or admin bypass.
+   */
+  async assertAuthenticatedHomeroomTeacher(classroomId: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException(
+        'Chỉ giáo viên chủ nhiệm mới có quyền quản lý danh sách học sinh',
+      );
+    }
+
+    return this.assertTeacherCanAccessClassroom(classroomId, teacherId, true);
+  }
+
+  /**
    * Validate and load an active TeachingAssignment for resource creation.
    * Ensures the assignment exists, is active, and belongs to the current teacher (unless admin).
    */

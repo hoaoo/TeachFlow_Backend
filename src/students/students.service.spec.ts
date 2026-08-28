@@ -20,6 +20,9 @@ describe('StudentsService (Production Unit Tests)', () => {
     schoolYearId: 'sy-2026',
     gradeId: 'grade-1',
     teacherId: 'teacher-a',
+    homeroomTeacherId: 'teacher-a',
+    isActive: true,
+    teachingAssignments: [],
     deletedAt: null,
     grade: { id: 'grade-1', name: 'Khối 1' },
     schoolYear: { id: 'sy-2026', name: '2026 - 2027', isCurrent: true },
@@ -32,6 +35,9 @@ describe('StudentsService (Production Unit Tests)', () => {
     schoolYearId: 'sy-2026',
     gradeId: 'grade-1',
     teacherId: 'teacher-a',
+    homeroomTeacherId: 'teacher-a',
+    isActive: true,
+    teachingAssignments: [],
     deletedAt: null,
     grade: { id: 'grade-1', name: 'Khối 1' },
     schoolYear: { id: 'sy-2026', name: '2026 - 2027', isCurrent: true },
@@ -150,6 +156,12 @@ describe('StudentsService (Production Unit Tests)', () => {
       },
       $transaction: jest.fn((cb) => cb(mockPrisma)),
     };
+
+    mockPrisma.classroom.findUnique.mockImplementation(({ where }: any) => {
+      if (where.id === mockClass1G.id) return Promise.resolve(mockClass1G);
+      if (where.id === mockClass1A.id) return Promise.resolve(mockClass1A);
+      return Promise.resolve(null);
+    });
 
     mockAudit = {
       log: jest.fn().mockResolvedValue({}),
@@ -447,6 +459,60 @@ describe('StudentsService (Production Unit Tests)', () => {
         ),
       ).rejects.toThrow(ConflictException);
     });
+
+    it('returns 403 when a subject teacher tries to add a student', async () => {
+      const subjectClass = {
+        ...mockClass1G,
+        teacherId: 'teacher-a',
+        homeroomTeacherId: 'teacher-b',
+        teachingAssignments: [{ teacherId: 'teacher-a', isActive: true }],
+      };
+      mockPrisma.classroom.findUnique.mockResolvedValue(subjectClass);
+
+      await expect(
+        service.create(
+          { fullName: 'Subject Teacher Attempt', classroomId: 'class-1g' },
+          'teacher-a',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.student.create).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 for another teacher using a cross-teacher classroomId', async () => {
+      const otherTeacherClass = {
+        ...mockClass1G,
+        teacherId: 'teacher-b',
+        homeroomTeacherId: 'teacher-b',
+        teachingAssignments: [],
+      };
+      mockPrisma.classroom.findUnique.mockResolvedValue(otherTeacherClass);
+
+      await expect(
+        service.create(
+          { fullName: 'Cross Teacher Attempt', classroomId: 'class-1g' },
+          'teacher-a',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.student.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('studentId mutation authorization', () => {
+    it('returns 403 when an assigned subject teacher updates a student profile', async () => {
+      const subjectClass = {
+        ...mockClass1G,
+        homeroomTeacherId: 'teacher-b',
+        teachingAssignments: [{ teacherId: 'teacher-a', isActive: true }],
+      };
+      mockPrisma.student.findUnique.mockResolvedValueOnce(mockStudent1);
+      mockPrisma.classroom.findMany.mockResolvedValueOnce([subjectClass]);
+      mockPrisma.classroom.findUnique.mockResolvedValueOnce(subjectClass);
+
+      await expect(
+        service.update('student-1', { fullName: 'Forbidden update' }, 'teacher-a'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.student.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('transferStudent (Classroom Transfer with Historical Preservation)', () => {
@@ -457,7 +523,10 @@ describe('StudentsService (Production Unit Tests)', () => {
       mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);
 
       // 2. target classroom check
-      mockPrisma.classroom.findUnique.mockResolvedValueOnce(mockClass1A);
+      mockPrisma.classroom.findUnique
+        .mockResolvedValueOnce(mockClass1G)
+        .mockResolvedValueOnce(mockClass1A)
+        .mockResolvedValueOnce(mockClass1A);
       mockPrisma.classroom.findMany.mockResolvedValueOnce([mockClass1G, mockClass1A]);
       mockPrisma.teachingAssignment.findMany.mockResolvedValueOnce([]);
 
@@ -470,7 +539,7 @@ describe('StudentsService (Production Unit Tests)', () => {
       expect(res.success).toBe(true);
       expect(mockPrisma.studentEnrollment.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { studentId: 'student-1', status: 'ACTIVE' },
+          where: { studentId: 'student-1', classroomId: 'class-1g', status: 'ACTIVE' },
           data: expect.objectContaining({ status: 'TRANSFERRED' }),
         }),
       );
@@ -498,7 +567,7 @@ describe('StudentsService (Production Unit Tests)', () => {
       const res = await service.remove('student-1', 'teacher-a');
       expect(res.success).toBe(true);
       expect(mockPrisma.studentEnrollment.updateMany).toHaveBeenCalledWith({
-        where: { studentId: 'student-1', status: 'ACTIVE' },
+        where: { studentId: 'student-1', classroomId: 'class-1g', status: 'ACTIVE' },
         data: { status: 'WITHDRAWN', leftAt: expect.any(Date) },
       });
       expect(mockAudit.log).toHaveBeenCalledWith(
@@ -617,10 +686,12 @@ describe('StudentsService (Production Unit Tests)', () => {
     });
 
     it('does not import into another teacher classroom', async () => {
-      mockPrisma.classroom.findUnique.mockResolvedValueOnce({
+      mockPrisma.classroom.findUnique.mockResolvedValue({
         ...mockClass1G,
         teacherId: 'teacher-b',
+        homeroomTeacherId: 'teacher-b',
         id: 'class-b',
+        teachingAssignments: [],
       });
       mockPrisma.classroom.findMany.mockResolvedValueOnce([]);
 

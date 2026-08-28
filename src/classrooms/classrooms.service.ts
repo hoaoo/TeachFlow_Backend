@@ -1013,7 +1013,7 @@ export class ClassroomsService {
   }
 
   async addStudent(classId: string, dto: AddStudentToClassDto, teacherId?: string) {
-    const classroom = await this.assertTeacherAccess(classId, teacherId);
+    const classroom = await this.assignmentAuth.assertAuthenticatedHomeroomTeacher(classId, teacherId);
 
     return await this.prisma.$transaction(async (tx) => {
       let studentId = dto.studentId;
@@ -1104,7 +1104,7 @@ export class ClassroomsService {
   }
 
   async importStudents(classId: string, dto: ImportStudentsDto, teacherId?: string) {
-    const classroom = await this.assertTeacherAccess(classId, teacherId);
+    const classroom = await this.assignmentAuth.assertAuthenticatedHomeroomTeacher(classId, teacherId);
 
     if (!dto.students || dto.students.length === 0) {
       throw new BadRequestException('Danh sách học sinh import không được rỗng');
@@ -1222,8 +1222,8 @@ export class ClassroomsService {
   }
 
   async transferStudent(classId: string, studentId: string, dto: TransferStudentDto, teacherId?: string) {
-    await this.assertTeacherAccess(classId, teacherId);
-    await this.assertTeacherAccess(dto.targetClassroomId, teacherId);
+    await this.assignmentAuth.assertAuthenticatedHomeroomTeacher(classId, teacherId);
+    await this.assignmentAuth.assertAuthenticatedHomeroomTeacher(dto.targetClassroomId, teacherId);
 
     return await this.prisma.$transaction(async (tx) => {
       const activeEnrollment = await tx.studentEnrollment.findFirst({
@@ -1299,7 +1299,7 @@ export class ClassroomsService {
   }
 
   async removeStudent(classId: string, studentId: string, teacherId?: string) {
-    await this.assertTeacherAccess(classId, teacherId);
+    await this.assignmentAuth.assertAuthenticatedHomeroomTeacher(classId, teacherId);
 
     return await this.prisma.$transaction(async (tx) => {
       const activeEnrollment = await tx.studentEnrollment.findFirst({

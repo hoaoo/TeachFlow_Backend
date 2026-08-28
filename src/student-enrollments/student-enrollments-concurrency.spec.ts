@@ -3,6 +3,7 @@ import { ConflictException, BadRequestException } from '@nestjs/common';
 import { StudentEnrollmentsService } from './student-enrollments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EnrollmentStatus } from '@prisma/client';
+import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 
 describe('StudentEnrollmentsService (Concurrency & Invariants)', () => {
   let service: StudentEnrollmentsService;
@@ -55,14 +56,21 @@ describe('StudentEnrollmentsService (Concurrency & Invariants)', () => {
     $queryRaw: jest.fn(),
   };
 
+  const mockClassroomAccess = {
+    assertAuthenticatedHomeroomTeacher: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.resetAllMocks();
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockPrisma));
+    mockPrisma.studentEnrollment.findUnique.mockResolvedValue({ classroomId: 'class-4a' });
+    mockClassroomAccess.assertAuthenticatedHomeroomTeacher.mockResolvedValue({ id: 'class-4a' });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StudentEnrollmentsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: TeachingAssignmentAuthorizationService, useValue: mockClassroomAccess },
       ],
     }).compile();
 
@@ -91,7 +99,7 @@ describe('StudentEnrollmentsService (Concurrency & Invariants)', () => {
     const res1 = await service.transfer('enroll-1', {
       targetClassroomId: 'class-4b',
       transferDate: '2026-11-16T00:00:00.000Z',
-    });
+    }, 'teacher-1');
     expect(res1.status).toBe(EnrollmentStatus.ACTIVE);
     expect(res1.classroomId).toBe('class-4b');
 
@@ -105,7 +113,7 @@ describe('StudentEnrollmentsService (Concurrency & Invariants)', () => {
       service.transfer('enroll-1', {
         targetClassroomId: 'class-4c',
         transferDate: '2026-11-16T00:00:00.000Z',
-      }),
+      }, 'teacher-1'),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -124,7 +132,7 @@ describe('StudentEnrollmentsService (Concurrency & Invariants)', () => {
         studentId: 'student-1',
         schoolYearId: 'sy-2026',
         classroomId: 'class-4a',
-      }),
+      }, 'teacher-1'),
     ).rejects.toThrow(ConflictException);
   });
 });

@@ -77,6 +77,7 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
       async (_classroomId: string, _teacherId?: string) => mockClassroomA,
     ),
     assertTeacherCanAccessClassroomAttendance: jest.fn(),
+    assertAuthenticatedHomeroomTeacher: jest.fn().mockResolvedValue(mockClassroomA),
   };
 
   const mockAuditService = {
@@ -355,6 +356,23 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
       await expect(
         service.findOne('class-a', 'teacher-a'),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('student roster authorization', () => {
+    it('returns 403 before mutation when a subject teacher adds a student', async () => {
+      mockAssignmentAuth.assertAuthenticatedHomeroomTeacher.mockRejectedValueOnce(
+        new ForbiddenException('Homeroom teacher required'),
+      );
+
+      await expect(
+        service.addStudent(
+          'class-a',
+          { fullName: 'Subject teacher attempt' },
+          'teacher-subject',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.student.create).not.toHaveBeenCalled();
     });
   });
 
