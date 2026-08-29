@@ -168,6 +168,18 @@ export class LessonPlansService {
           },
           orderBy: { createdAt: 'desc' },
         },
+        htmlGames: {
+          where: { htmlGame: { status: 'PUBLISHED' } },
+          include: {
+            htmlGame: {
+              include: {
+                subject: true,
+                grade: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
         versions: {
           select: {
             id: true,
@@ -1131,6 +1143,84 @@ export class LessonPlansService {
     return links.map((l) => this.mapAttachedResource(l.resource));
   }
 
+  async attachHtmlGame(lessonPlanId: string, htmlGameId: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể gắn trò chơi vào giáo án');
+    }
+    await this.findOne(lessonPlanId, teacherId);
+
+    const game = await this.prisma.htmlGame.findFirst({
+      where: {
+        id: htmlGameId,
+        status: 'PUBLISHED',
+      },
+      include: {
+        subject: true,
+        grade: true,
+      },
+    });
+    if (!game) {
+      throw new NotFoundException('Không tìm thấy trò chơi đã xuất bản');
+    }
+
+    const link = await this.prisma.lessonPlanHtmlGame.upsert({
+      where: {
+        lessonPlanId_htmlGameId: {
+          lessonPlanId,
+          htmlGameId,
+        },
+      },
+      update: {},
+      create: {
+        lessonPlanId,
+        htmlGameId,
+      },
+      include: {
+        htmlGame: {
+          include: {
+            subject: true,
+            grade: true,
+          },
+        },
+      },
+    });
+    return this.mapAttachedHtmlGame(link.htmlGame);
+  }
+
+  async detachHtmlGame(lessonPlanId: string, htmlGameId: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể gỡ trò chơi khỏi giáo án');
+    }
+    await this.findOne(lessonPlanId, teacherId);
+    await this.prisma.lessonPlanHtmlGame.deleteMany({
+      where: { lessonPlanId, htmlGameId },
+    });
+    return { success: true, message: 'Đã gỡ trò chơi khỏi giáo án' };
+  }
+
+  async getAttachedHtmlGames(lessonPlanId: string, teacherId?: string) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể xem trò chơi của giáo án');
+    }
+    await this.findOne(lessonPlanId, teacherId);
+    const links = await this.prisma.lessonPlanHtmlGame.findMany({
+      where: {
+        lessonPlanId,
+        htmlGame: { status: 'PUBLISHED' },
+      },
+      include: {
+        htmlGame: {
+          include: {
+            subject: true,
+            grade: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return links.map((link) => this.mapAttachedHtmlGame(link.htmlGame));
+  }
+
   private mapLessonPlanSummary(plan: any) {
     return {
       id: plan.id,
@@ -1157,6 +1247,9 @@ export class LessonPlansService {
   private mapLessonPlanDetail(plan: any) {
     const activities = (plan.activities || []).map((a: any) => this.mapActivity(a));
     const resources = (plan.resources || []).map((r: any) => this.mapAttachedResource(r.resource));
+    const htmlGames = (plan.htmlGames || []).map((link: any) =>
+      this.mapAttachedHtmlGame(link.htmlGame),
+    );
     return {
       id: plan.id,
       title: plan.title,
@@ -1184,6 +1277,7 @@ export class LessonPlansService {
       version: plan.version || 1,
       activities,
       resources,
+      htmlGames,
       schedules: plan.schedules || [],
       versions: plan.versions || [],
       updatedAt: plan.updatedAt,
@@ -1217,6 +1311,22 @@ export class LessonPlansService {
       meta: r.meta || `${formattedSize} · ${extension || 'DOC'}`,
       tone: r.tone || 'teal',
       createdAt: r.createdAt,
+    };
+  }
+
+  private mapAttachedHtmlGame(game: any) {
+    if (!game) return null;
+    return {
+      id: game.id,
+      title: game.title,
+      description: game.description,
+      thumbnail: game.thumbnail,
+      gradeId: game.gradeId,
+      grade: game.grade || null,
+      subjectId: game.subjectId,
+      subject: game.subject || null,
+      status: game.status,
+      updatedAt: game.updatedAt,
     };
   }
 

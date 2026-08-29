@@ -113,6 +113,38 @@ describe('LessonPlansService (Full Production Spec with Upload & Security)', () 
       teachingActivity: {
         create: jest.fn().mockResolvedValue({ id: 'lib-act-1', title: 'Saved Act' }),
       },
+      htmlGame: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'game-1',
+          title: 'Phép cộng vui',
+          description: null,
+          thumbnail: null,
+          gradeId: null,
+          subjectId: null,
+          status: 'PUBLISHED',
+          grade: null,
+          subject: null,
+          updatedAt: new Date('2026-08-29T00:00:00Z'),
+        }),
+      },
+      lessonPlanHtmlGame: {
+        upsert: jest.fn().mockResolvedValue({
+          htmlGame: {
+            id: 'game-1',
+            title: 'Phép cộng vui',
+            description: null,
+            thumbnail: null,
+            gradeId: null,
+            subjectId: null,
+            status: 'PUBLISHED',
+            grade: null,
+            subject: null,
+            updatedAt: new Date('2026-08-29T00:00:00Z'),
+          },
+        }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       teachingAssignment: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
@@ -364,5 +396,51 @@ describe('LessonPlansService (Full Production Spec with Upload & Security)', () 
     await expect(
       service.getLessonPlanFile('lp-upload-1', 'teacher-intruder'),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('attaches only a published game to the owning teacher lesson plan', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+
+    const result = await service.attachHtmlGame('lp-1', 'game-1', 'teacher-1');
+
+    expect(prisma.htmlGame.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'game-1', status: 'PUBLISHED' } }),
+    );
+    expect(prisma.lessonPlanHtmlGame.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          lessonPlanId_htmlGameId: { lessonPlanId: 'lp-1', htmlGameId: 'game-1' },
+        },
+      }),
+    );
+    expect(result.id).toBe('game-1');
+  });
+
+  it('rejects attaching a game to another teacher lesson plan (IDOR)', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+
+    await expect(
+      service.attachHtmlGame('lp-1', 'game-1', 'teacher-intruder'),
+    ).rejects.toThrow(ForbiddenException);
+    expect(prisma.htmlGame.findFirst).not.toHaveBeenCalled();
+    expect(prisma.lessonPlanHtmlGame.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not attach draft or disabled games', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+    prisma.htmlGame.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.attachHtmlGame('lp-1', 'game-draft', 'teacher-1'),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('rejects detaching a game from another teacher lesson plan (IDOR)', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+
+    await expect(
+      service.detachHtmlGame('lp-1', 'game-1', 'teacher-intruder'),
+    ).rejects.toThrow(ForbiddenException);
+    expect(prisma.lessonPlanHtmlGame.deleteMany).not.toHaveBeenCalled();
   });
 });

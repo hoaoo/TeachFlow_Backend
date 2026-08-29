@@ -12,6 +12,12 @@ enum Role {
   TEACHER
 }
 
+enum HtmlGameStatus {
+  DRAFT
+  PUBLISHED
+  DISABLED
+}
+
 enum TeachingMode {
   PRIMARY_GENERALIST
   SUBJECT_SPECIALIST
@@ -133,6 +139,7 @@ model User {
   teacher       Teacher?
   notifications Notification[]
   pushDevices   PushDevice[]
+  htmlGamesCreated HtmlGame[] @relation("HtmlGameCreator")
 }
 
 model Teacher {
@@ -222,6 +229,7 @@ model Grade {
   teachingActivities TeachingActivity[]
   worksheets         Worksheet[]
   teachingResources  TeachingResource[]
+  htmlGames          HtmlGame[]
 }
 
 model Subject {
@@ -245,6 +253,7 @@ model Subject {
   teachingAssignments TeachingAssignment[]
   schedules           Schedule[]
   classSubjects       ClassSubject[]
+  htmlGames           HtmlGame[]
 }
 
 model Classroom {
@@ -525,6 +534,7 @@ model LessonPlan {
   lesson             Lesson?              @relation(fields: [lessonId], references: [id])
   activities         LessonPlanActivity[]
   resources          LessonPlanResource[]
+  htmlGames          LessonPlanHtmlGame[]
   schedules          Schedule[]
   versions           LessonPlanVersion[]
 
@@ -880,6 +890,44 @@ model LessonPlanResource {
   resource   TeachingResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
   @@unique([lessonPlanId, resourceId])
+}
+
+model HtmlGame {
+  id            String         @id @default(uuid())
+  title         String
+  description   String?        @db.Text
+  thumbnail     Json?
+  gradeId       String?
+  subjectId     String?
+  storagePrefix String
+  entryFile     String         @default("index.html")
+  status        HtmlGameStatus @default(DRAFT)
+  createdById   String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  grade       Grade?               @relation(fields: [gradeId], references: [id], onDelete: SetNull)
+  subject     Subject?             @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  createdBy   User                 @relation("HtmlGameCreator", fields: [createdById], references: [id])
+  lessonPlans LessonPlanHtmlGame[]
+
+  @@index([status, updatedAt])
+  @@index([gradeId])
+  @@index([subjectId])
+  @@index([createdById])
+}
+
+model LessonPlanHtmlGame {
+  id           String   @id @default(uuid())
+  lessonPlanId String
+  htmlGameId   String
+  createdAt    DateTime @default(now())
+
+  lessonPlan LessonPlan @relation(fields: [lessonPlanId], references: [id], onDelete: Cascade)
+  htmlGame   HtmlGame   @relation(fields: [htmlGameId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonPlanId, htmlGameId])
+  @@index([htmlGameId])
 }
 
 model TeacherTask {

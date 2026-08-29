@@ -11,6 +11,7 @@ import {
   UseInterceptors,
   UploadedFile,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -24,6 +25,8 @@ import { ReorderActivitiesDto } from './dto/reorder-activities.dto';
 import { SaveActivityToLibraryDto } from './dto/save-to-library.dto';
 import { UploadLessonPlanDto } from './dto/upload-lesson-plan.dto';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
 
 @ApiTags('Lesson Plans')
 @ApiBearerAuth()
@@ -266,6 +269,41 @@ export class LessonPlansController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.getAttachedResources(id, user.teacherId);
+  }
+
+  @Get(':id/html-games')
+  @UseGuards(RolesGuard)
+  @Roles('TEACHER')
+  @ApiOperation({ summary: 'Lấy danh sách trò chơi HTML đã xuất bản gắn với giáo án' })
+  getAttachedHtmlGames(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.getAttachedHtmlGames(id, user.teacherId);
+  }
+
+  @Post(':id/html-games/:htmlGameId')
+  @UseGuards(RolesGuard)
+  @Roles('TEACHER')
+  @ApiOperation({ summary: 'Gắn trò chơi HTML đã xuất bản vào giáo án của giáo viên' })
+  attachHtmlGame(
+    @Param('id') id: string,
+    @Param('htmlGameId') htmlGameId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.attachHtmlGame(id, htmlGameId, user.teacherId);
+  }
+
+  @Delete(':id/html-games/:htmlGameId')
+  @UseGuards(RolesGuard)
+  @Roles('TEACHER')
+  @ApiOperation({ summary: 'Gỡ trò chơi HTML khỏi giáo án của giáo viên' })
+  detachHtmlGame(
+    @Param('id') id: string,
+    @Param('htmlGameId') htmlGameId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.detachHtmlGame(id, htmlGameId, user.teacherId);
   }
 
   @Post(':id/resources/:resourceId')

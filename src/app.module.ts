@@ -35,6 +35,7 @@ import { SeatingPlansModule } from './seating-plans/seating-plans.module';
 import { TemplatesModule } from './templates/templates.module';
 import { SearchModule } from './search/search.module';
 import { CommonModule } from './common/common.module';
+import { HtmlGamesModule } from './html-games/html-games.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
@@ -84,6 +85,7 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     NotificationsModule,
     SchedulesModule,
     SearchModule,
+    HtmlGamesModule,
   ],
   providers: [
     {

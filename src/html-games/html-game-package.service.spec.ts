@@ -1,0 +1,73 @@
+import { BadRequestException, PayloadTooLargeException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import JSZip = require('jszip');
+import { HtmlGamePackageService } from './html-game-package.service';
+
+describe('HtmlGamePackageService', () => {
+  const config = {
+    get: jest.fn(),
+  } as unknown as ConfigService;
+  let service: HtmlGamePackageService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new HtmlGamePackageService(config);
+  });
+
+  const upload = (name: string, buffer: Buffer): Express.Multer.File =>
+    ({ originalname: name, buffer, size: buffer.length } as Express.Multer.File);
+
+  it('normalizes a standalone HTML file to the root entry file', async () => {
+    const result = await service.parse(upload('lesson-game.html', Buffer.from('<h1>Game</h1>')));
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({
+      relativePath: 'index.html',
+      contentType: 'text/html; charset=utf-8',
+    });
+  });
+
+  it('accepts a ZIP with a root index and safe relative assets', async () => {
+    const zip = new JSZip();
+    zip.file('index.html', '<script src="assets/game.js"></script>');
+    zip.file('assets/game.js', 'document.body.dataset.ready = "true";');
+
+    const result = await service.parse(upload('game.zip', await zip.generateAsync({ type: 'nodebuffer' })));
+
+    expect(result.files.map((item) => item.relativePath).sort()).toEqual([
+      'assets/game.js',
+      'index.html',
+    ]);
+  });
+
+  it('rejects ZIP traversal paths', async () => {
+    const zip = new JSZip();
+    zip.file('index.html', '<h1>Game</h1>');
+    zip.file('../outside.js', 'alert(1)');
+
+    await expect(
+      service.parse(upload('unsafe.zip', await zip.generateAsync({ type: 'nodebuffer' }))),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects packages without a root index.html', async () => {
+    const zip = new JSZip();
+    zip.file('nested/index.html', '<h1>Nested</h1>');
+
+    await expect(
+      service.parse(upload('nested.zip', await zip.generateAsync({ type: 'nodebuffer' }))),
+    ).rejects.toThrow('index.html');
+  });
+
+  it('rejects extracted content above the configured limit', async () => {
+    (config.get as jest.Mock).mockImplementation((key: string) =>
+      key === 'HTML_GAME_MAX_EXTRACTED_MB' ? '0.000001' : undefined,
+    );
+    const zip = new JSZip();
+    zip.file('index.html', '<h1>This content is larger than one byte</h1>');
+
+    await expect(
+      service.parse(upload('large.zip', await zip.generateAsync({ type: 'nodebuffer' }))),
+    ).rejects.toThrow(PayloadTooLargeException);
+  });
+});
