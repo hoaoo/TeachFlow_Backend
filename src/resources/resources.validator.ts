@@ -129,6 +129,20 @@ export function detectMimeFromMagicBytes(buffer?: Buffer | null): string | null 
   if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
     return 'image/gif';
   }
+  // WebP: RIFF....WEBP
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
   // WebM / Matroska: \x1a\x45\xdf\xa3
   if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
     return 'video/webm';
@@ -278,6 +292,9 @@ export function validateUploadedFile(
     }
     if (ext === '.gif' && magicMime !== 'image/gif') {
       throw new BadRequestException('Nội dung tệp không phải GIF hợp lệ');
+    }
+    if (ext === '.webp' && magicMime !== 'image/webp') {
+      throw new BadRequestException('Nội dung tệp không phải WebP hợp lệ');
     }
     if (['.docx', '.xlsx', '.pptx'].includes(ext) && magicMime !== 'application/zip') {
       throw new BadRequestException(`Nội dung tệp không khớp định dạng ${ext}`);
