@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, HttpCode, HttpStatus, Param, Patch, Post,
+  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put,
   UploadedFile, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -13,6 +13,13 @@ import { UpdateHtmlGameStatusDto } from './dto/update-html-game-status.dto';
 import { UpdateHtmlGameDto } from './dto/update-html-game.dto';
 import { DEFAULT_HTML_GAME_MAX_UPLOAD_BYTES } from './html-game.constants';
 import { HtmlGamesService } from './html-games.service';
+import { HtmlGameSourceDto } from './dto/html-game-source.dto';
+import {
+  CreateHtmlGameQuestionDto,
+  ReorderHtmlGameQuestionsDto,
+  UpdateHtmlGameQuestionDto,
+} from './dto/html-game-question.dto';
+import { HtmlGameQuestionsService } from './html-game-questions.service';
 
 @ApiTags('Admin HTML Games')
 @ApiBearerAuth()
@@ -20,7 +27,10 @@ import { HtmlGamesService } from './html-games.service';
 @Roles('ADMIN')
 @Controller('admin/html-games')
 export class AdminHtmlGamesController {
-  constructor(private readonly games: HtmlGamesService) {}
+  constructor(
+    private readonly games: HtmlGamesService,
+    private readonly questions: HtmlGameQuestionsService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Tạo metadata trò chơi HTML ở trạng thái nháp' })
@@ -39,6 +49,41 @@ export class AdminHtmlGamesController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     return this.games.uploadPackage(id, file);
+  }
+
+  @Post(':id/source')
+  @ApiOperation({ summary: 'Lưu mã HTML dán trực tiếp thành index.html trong object storage' })
+  uploadSource(@Param('id') id: string, @Body() dto: HtmlGameSourceDto) {
+    return this.games.uploadSource(id, dto);
+  }
+
+  @Get(':id/questions')
+  listQuestions(@Param('id') id: string) {
+    return this.questions.list(id);
+  }
+
+  @Post(':id/questions')
+  createQuestion(@Param('id') id: string, @Body() dto: CreateHtmlGameQuestionDto) {
+    return this.questions.create(id, dto);
+  }
+
+  @Patch(':id/questions/:questionId')
+  updateQuestion(
+    @Param('id') id: string,
+    @Param('questionId') questionId: string,
+    @Body() dto: UpdateHtmlGameQuestionDto,
+  ) {
+    return this.questions.update(id, questionId, dto);
+  }
+
+  @Delete(':id/questions/:questionId')
+  removeQuestion(@Param('id') id: string, @Param('questionId') questionId: string) {
+    return this.questions.remove(id, questionId);
+  }
+
+  @Put(':id/questions/reorder')
+  reorderQuestions(@Param('id') id: string, @Body() dto: ReorderHtmlGameQuestionsDto) {
+    return this.questions.reorder(id, dto);
   }
 
   @Patch(':id')

@@ -1,10 +1,11 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { HtmlGameQueryDto } from './dto/html-game-query.dto';
 import { HtmlGamesService } from './html-games.service';
+import { TeacherHtmlGamesService } from './teacher-html-games.service';
 
 @ApiTags('HTML Games')
 @ApiBearerAuth()
@@ -12,7 +13,10 @@ import { HtmlGamesService } from './html-games.service';
 @Roles('ADMIN', 'TEACHER')
 @Controller('html-games')
 export class HtmlGamesController {
-  constructor(private readonly games: HtmlGamesService) {}
+  constructor(
+    private readonly games: HtmlGamesService,
+    private readonly customizations: TeacherHtmlGamesService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Danh sách trò chơi; giáo viên chỉ thấy bản đã xuất bản' })
@@ -31,5 +35,11 @@ export class HtmlGamesController {
   @Get(':id/play')
   play(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.games.getPlay(id, user);
+  }
+
+  @Post(':id/customizations')
+  @Roles('TEACHER')
+  customize(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.customizations.createOrGet(id, user.teacherId);
   }
 }

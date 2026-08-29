@@ -9,6 +9,7 @@ import JSZip = require('jszip');
 import {
   DEFAULT_HTML_GAME_MAX_EXTRACTED_BYTES,
   DEFAULT_HTML_GAME_MAX_FILE_COUNT,
+  DEFAULT_HTML_GAME_MAX_SOURCE_BYTES,
   DEFAULT_HTML_GAME_MAX_UPLOAD_BYTES,
   HTML_GAME_ALLOWED_EXTENSIONS,
 } from './html-game.constants';
@@ -38,6 +39,9 @@ export class HtmlGamePackageService {
 
     const extension = path.extname(path.basename(file.originalname || '')).toLowerCase();
     if (extension === '.html') {
+      if (!this.hasAllowedMime(file.mimetype, ['text/html', 'application/xhtml+xml'])) {
+        throw new BadRequestException('MIME của tệp HTML không hợp lệ');
+      }
       return {
         files: [{
           relativePath: 'index.html',
@@ -49,6 +53,12 @@ export class HtmlGamePackageService {
     }
     if (extension !== '.zip') {
       throw new BadRequestException('Chỉ chấp nhận một tệp .html hoặc gói .zip');
+    }
+    if (!this.hasAllowedMime(file.mimetype, [
+      'application/zip',
+      'application/x-zip-compressed',
+    ])) {
+      throw new BadRequestException('MIME của tệp ZIP không hợp lệ');
     }
 
     let archive: JSZip;
@@ -68,6 +78,10 @@ export class HtmlGamePackageService {
 
     let declaredTotal = 0;
     const validated = entries.map((entry) => {
+      const unixPermissions = Number((entry as any).unixPermissions || 0);
+      if ((unixPermissions & 0o170000) === 0o120000) {
+        throw new BadRequestException('Không chấp nhận symbolic link trong gói ZIP');
+      }
       const rawName = String((entry as any).unsafeOriginalName || entry.name);
       const relativePath = this.validateRelativePath(rawName);
       const extension = path.posix.extname(relativePath).toLowerCase();
@@ -109,6 +123,30 @@ export class HtmlGamePackageService {
       throw new BadRequestException('index.html không được để trống');
     }
     return { files, totalSize: actualTotal };
+  }
+
+  parseSource(html: string): ParsedHtmlGamePackage {
+    const source = String(html || '');
+    const body = Buffer.from(source, 'utf8');
+    if (!source.trim()) {
+      throw new BadRequestException('Mã HTML không được để trống');
+    }
+    if (body.length > DEFAULT_HTML_GAME_MAX_SOURCE_BYTES) {
+      throw new PayloadTooLargeException('Mã HTML dán trực tiếp vượt quá giới hạn 80 KB');
+    }
+    return {
+      files: [{
+        relativePath: 'index.html',
+        contentType: 'text/html; charset=utf-8',
+        body,
+      }],
+      totalSize: body.length,
+    };
+  }
+
+  private hasAllowedMime(actual: string | undefined, allowed: string[]): boolean {
+    const mime = String(actual || '').toLowerCase().split(';')[0].trim();
+    return !mime || mime === 'application/octet-stream' || allowed.includes(mime);
   }
 
   private validateRelativePath(rawName: string): string {

@@ -25,6 +25,9 @@ describe('HtmlGamesService', () => {
     storagePrefix: 'games/game-1/package-current',
     entryFile: 'index.html',
     status: HtmlGameStatus.PUBLISHED,
+    supportsQuestionConfig: false,
+    configSchemaVersion: null,
+    questions: [],
     createdById: 'admin-1',
     createdBy: { id: 'admin-1', email: 'admin@example.com' },
     grade: null,
@@ -45,6 +48,10 @@ describe('HtmlGamesService', () => {
       },
       grade: { findUnique: jest.fn() },
       subject: { findUnique: jest.fn() },
+      teacherHtmlGame: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     storage = {
       objectExists: jest.fn().mockResolvedValue(true),
@@ -58,6 +65,12 @@ describe('HtmlGamesService', () => {
           { relativePath: 'index.html', body: Buffer.from('<h1>Game</h1>'), contentType: 'text/html' },
         ],
         totalSize: 13,
+      }),
+      parseSource: jest.fn().mockReturnValue({
+        files: [
+          { relativePath: 'index.html', body: Buffer.from('<h1>Source</h1>'), contentType: 'text/html' },
+        ],
+        totalSize: 15,
       }),
     };
     service = new HtmlGamesService(prisma, storage, packages);
@@ -84,9 +97,34 @@ describe('HtmlGamesService', () => {
       id: game.id,
       title: game.title,
       playUrl: 'https://games.example/games/game-1/index.html',
-      sandbox: 'allow-scripts allow-forms',
+      sandbox: 'allow-scripts',
       referrerPolicy: 'no-referrer',
+      supportsQuestionConfig: false,
+      configSchemaVersion: null,
+      questions: [],
     });
+  });
+
+  it.each([HtmlGameStatus.DRAFT, HtmlGameStatus.DISABLED])(
+    'does not let a teacher play a %s game',
+    async (status) => {
+      prisma.htmlGame.findUnique.mockResolvedValue({ ...game, status });
+      await expect(service.getPlay(game.id, teacher)).rejects.toThrow(NotFoundException);
+    },
+  );
+
+  it('stores pasted HTML through the same staged object-storage path', async () => {
+    prisma.htmlGame.findUnique
+      .mockResolvedValueOnce(game)
+      .mockResolvedValueOnce({ ...game, storagePrefix: 'games/game-1/package-source' });
+
+    const result = await service.uploadSource(game.id, { html: '<h1>Source</h1>' });
+
+    expect(packages.parseSource).toHaveBeenCalledWith('<h1>Source</h1>');
+    expect(storage.putObject).toHaveBeenCalledWith(
+      expect.objectContaining({ key: expect.stringMatching(/\/index\.html$/) }),
+    );
+    expect(result.package.fileCount).toBe(1);
   });
 
   it('refuses publication until the entry object exists', async () => {

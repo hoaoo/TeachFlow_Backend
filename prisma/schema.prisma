@@ -18,6 +18,13 @@ enum HtmlGameStatus {
   DISABLED
 }
 
+enum HtmlGameQuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  SHORT_ANSWER
+}
+
 enum TeachingMode {
   PRIMARY_GENERALIST
   SUBJECT_SPECIALIST
@@ -173,6 +180,7 @@ model Teacher {
   teachingAssignments    TeachingAssignment[]
   schedules              Schedule[]
   parentContactLogs      ParentContactLog[]
+  htmlGameCustomizations TeacherHtmlGame[]
 }
 
 model SchoolYear {
@@ -535,6 +543,7 @@ model LessonPlan {
   activities         LessonPlanActivity[]
   resources          LessonPlanResource[]
   htmlGames          LessonPlanHtmlGame[]
+  teacherHtmlGames   LessonPlanTeacherHtmlGame[]
   schedules          Schedule[]
   versions           LessonPlanVersion[]
 
@@ -893,28 +902,88 @@ model LessonPlanResource {
 }
 
 model HtmlGame {
-  id            String         @id @default(uuid())
-  title         String
-  description   String?        @db.Text
-  thumbnail     Json?
-  gradeId       String?
-  subjectId     String?
-  storagePrefix String
-  entryFile     String         @default("index.html")
-  status        HtmlGameStatus @default(DRAFT)
-  createdById   String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id                     String         @id @default(uuid())
+  title                  String
+  description            String?        @db.Text
+  thumbnail              Json?
+  gradeId                String?
+  subjectId              String?
+  storagePrefix          String
+  entryFile              String         @default("index.html")
+  status                 HtmlGameStatus @default(DRAFT)
+  supportsQuestionConfig Boolean        @default(false)
+  configSchemaVersion    Int?
+  createdById            String
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
-  grade       Grade?               @relation(fields: [gradeId], references: [id], onDelete: SetNull)
-  subject     Subject?             @relation(fields: [subjectId], references: [id], onDelete: SetNull)
-  createdBy   User                 @relation("HtmlGameCreator", fields: [createdById], references: [id])
-  lessonPlans LessonPlanHtmlGame[]
+  grade          Grade?               @relation(fields: [gradeId], references: [id], onDelete: SetNull)
+  subject        Subject?             @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  createdBy      User                 @relation("HtmlGameCreator", fields: [createdById], references: [id])
+  questions      HtmlGameQuestion[]
+  customizations TeacherHtmlGame[]
+  lessonPlans    LessonPlanHtmlGame[]
 
   @@index([status, updatedAt])
   @@index([gradeId])
   @@index([subjectId])
   @@index([createdById])
+}
+
+model HtmlGameQuestion {
+  id            String               @id @default(uuid())
+  htmlGameId    String
+  order         Int
+  question      String               @db.Text
+  type          HtmlGameQuestionType
+  options       Json?
+  correctAnswer Json
+  explanation   String?              @db.Text
+  metadata      Json?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  htmlGame HtmlGame @relation(fields: [htmlGameId], references: [id], onDelete: Cascade)
+
+  @@unique([htmlGameId, order])
+  @@index([htmlGameId])
+}
+
+model TeacherHtmlGame {
+  id         String   @id @default(uuid())
+  htmlGameId String
+  teacherId  String
+  title      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  htmlGame    HtmlGame                    @relation(fields: [htmlGameId], references: [id], onDelete: Cascade)
+  teacher     Teacher                     @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  questions   TeacherHtmlGameQuestion[]
+  lessonPlans LessonPlanTeacherHtmlGame[]
+
+  @@unique([teacherId, htmlGameId])
+  @@index([htmlGameId])
+  @@index([teacherId])
+}
+
+model TeacherHtmlGameQuestion {
+  id                String               @id @default(uuid())
+  teacherHtmlGameId String
+  order             Int
+  question          String               @db.Text
+  type              HtmlGameQuestionType
+  options           Json?
+  correctAnswer     Json
+  explanation       String?              @db.Text
+  metadata          Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  teacherHtmlGame TeacherHtmlGame @relation(fields: [teacherHtmlGameId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherHtmlGameId, order])
+  @@index([teacherHtmlGameId])
 }
 
 model LessonPlanHtmlGame {
@@ -928,6 +997,19 @@ model LessonPlanHtmlGame {
 
   @@unique([lessonPlanId, htmlGameId])
   @@index([htmlGameId])
+}
+
+model LessonPlanTeacherHtmlGame {
+  id                String   @id @default(uuid())
+  lessonPlanId      String
+  teacherHtmlGameId String
+  createdAt         DateTime @default(now())
+
+  lessonPlan      LessonPlan      @relation(fields: [lessonPlanId], references: [id], onDelete: Cascade)
+  teacherHtmlGame TeacherHtmlGame @relation(fields: [teacherHtmlGameId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonPlanId, teacherHtmlGameId])
+  @@index([teacherHtmlGameId])
 }
 
 model TeacherTask {

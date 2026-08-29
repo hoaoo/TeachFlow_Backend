@@ -180,6 +180,24 @@ export class LessonPlansService {
           },
           orderBy: { createdAt: 'desc' },
         },
+        teacherHtmlGames: {
+          where: {
+            teacherHtmlGame: {
+              ...(teacherId ? { teacherId } : {}),
+              htmlGame: { status: 'PUBLISHED' },
+            },
+          },
+          include: {
+            teacherHtmlGame: {
+              include: {
+                htmlGame: {
+                  include: { subject: true, grade: true },
+                },
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
         versions: {
           select: {
             id: true,
@@ -1218,7 +1236,83 @@ export class LessonPlansService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return links.map((link) => this.mapAttachedHtmlGame(link.htmlGame));
+    const customLinks = await this.prisma.lessonPlanTeacherHtmlGame.findMany({
+      where: {
+        lessonPlanId,
+        teacherHtmlGame: {
+          teacherId,
+          htmlGame: { status: 'PUBLISHED' },
+        },
+      },
+      include: {
+        teacherHtmlGame: {
+          include: {
+            htmlGame: { include: { subject: true, grade: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return [
+      ...customLinks.map((link) => this.mapAttachedTeacherHtmlGame(link.teacherHtmlGame)),
+      ...links.map((link) => this.mapAttachedHtmlGame(link.htmlGame)),
+    ];
+  }
+
+  async attachTeacherHtmlGame(
+    lessonPlanId: string,
+    teacherHtmlGameId: string,
+    teacherId?: string,
+  ) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể gắn trò chơi vào giáo án');
+    }
+    await this.findOne(lessonPlanId, teacherId);
+    const customization = await this.prisma.teacherHtmlGame.findFirst({
+      where: {
+        id: teacherHtmlGameId,
+        teacherId,
+        htmlGame: { status: 'PUBLISHED' },
+      },
+      include: { htmlGame: { include: { subject: true, grade: true } } },
+    });
+    if (!customization) {
+      throw new NotFoundException('Không tìm thấy bản trò chơi tùy chỉnh đã xuất bản');
+    }
+    const link = await this.prisma.lessonPlanTeacherHtmlGame.upsert({
+      where: {
+        lessonPlanId_teacherHtmlGameId: { lessonPlanId, teacherHtmlGameId },
+      },
+      update: {},
+      create: { lessonPlanId, teacherHtmlGameId },
+      include: {
+        teacherHtmlGame: {
+          include: { htmlGame: { include: { subject: true, grade: true } } },
+        },
+      },
+    });
+    return this.mapAttachedTeacherHtmlGame(link.teacherHtmlGame);
+  }
+
+  async detachTeacherHtmlGame(
+    lessonPlanId: string,
+    teacherHtmlGameId: string,
+    teacherId?: string,
+  ) {
+    if (!teacherId) {
+      throw new ForbiddenException('Chỉ giáo viên mới có thể gỡ trò chơi khỏi giáo án');
+    }
+    await this.findOne(lessonPlanId, teacherId);
+    const customization = await this.prisma.teacherHtmlGame.findUnique({
+      where: { id: teacherHtmlGameId },
+    });
+    if (customization && customization.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền gỡ bản tùy chỉnh này');
+    }
+    await this.prisma.lessonPlanTeacherHtmlGame.deleteMany({
+      where: { lessonPlanId, teacherHtmlGameId },
+    });
+    return { success: true, message: 'Đã gỡ trò chơi tùy chỉnh khỏi giáo án' };
   }
 
   private mapLessonPlanSummary(plan: any) {
@@ -1250,6 +1344,9 @@ export class LessonPlansService {
     const htmlGames = (plan.htmlGames || []).map((link: any) =>
       this.mapAttachedHtmlGame(link.htmlGame),
     );
+    const teacherHtmlGames = (plan.teacherHtmlGames || []).map((link: any) =>
+      this.mapAttachedTeacherHtmlGame(link.teacherHtmlGame),
+    );
     return {
       id: plan.id,
       title: plan.title,
@@ -1277,7 +1374,7 @@ export class LessonPlansService {
       version: plan.version || 1,
       activities,
       resources,
-      htmlGames,
+      htmlGames: [...teacherHtmlGames, ...htmlGames],
       schedules: plan.schedules || [],
       versions: plan.versions || [],
       updatedAt: plan.updatedAt,
@@ -1327,6 +1424,33 @@ export class LessonPlansService {
       subject: game.subject || null,
       status: game.status,
       updatedAt: game.updatedAt,
+      kind: 'MASTER',
+      htmlGameId: game.id,
+      customizationId: null,
+      supportsQuestionConfig: game.supportsQuestionConfig,
+      configSchemaVersion: game.configSchemaVersion,
+    };
+  }
+
+  private mapAttachedTeacherHtmlGame(customization: any) {
+    if (!customization?.htmlGame) return null;
+    const game = customization.htmlGame;
+    return {
+      id: customization.id,
+      title: customization.title || game.title,
+      description: game.description,
+      thumbnail: game.thumbnail,
+      gradeId: game.gradeId,
+      grade: game.grade || null,
+      subjectId: game.subjectId,
+      subject: game.subject || null,
+      status: game.status,
+      updatedAt: customization.updatedAt,
+      kind: 'CUSTOMIZATION',
+      htmlGameId: game.id,
+      customizationId: customization.id,
+      supportsQuestionConfig: true,
+      configSchemaVersion: game.configSchemaVersion,
     };
   }
 

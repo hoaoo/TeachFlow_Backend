@@ -14,6 +14,8 @@ import { HtmlGameQueryDto } from './dto/html-game-query.dto';
 import { UpdateHtmlGameStatusDto } from './dto/update-html-game-status.dto';
 import { UpdateHtmlGameDto } from './dto/update-html-game.dto';
 import { HtmlGamePackageService } from './html-game-package.service';
+import { HtmlGameSourceDto } from './dto/html-game-source.dto';
+import { HTML_GAME_CONFIG_SCHEMA_VERSION } from './html-game.constants';
 
 const GAME_INCLUDE = {
   grade: { select: { id: true, name: true } },
@@ -50,7 +52,19 @@ export class HtmlGamesService {
       include: GAME_INCLUDE,
       orderBy: { updatedAt: 'desc' },
     });
-    return games.map((game) => this.mapGame(game));
+    const customizations = user.role === 'TEACHER' && user.teacherId && games.length
+      ? await this.prisma.teacherHtmlGame.findMany({
+          where: {
+            teacherId: user.teacherId,
+            htmlGameId: { in: games.map((game) => game.id) },
+          },
+          select: { id: true, htmlGameId: true },
+        })
+      : [];
+    const customizationByGame = new Map(
+      customizations.map((customization) => [customization.htmlGameId, customization.id]),
+    );
+    return games.map((game) => this.mapGame(game, customizationByGame.get(game.id)));
   }
 
   async findOne(id: string, user: AuthenticatedUser) {
@@ -61,11 +75,20 @@ export class HtmlGamesService {
     if (!game || (user.role !== 'ADMIN' && game.status !== HtmlGameStatus.PUBLISHED)) {
       throw new NotFoundException('Không tìm thấy trò chơi HTML');
     }
-    return this.mapGame(game);
+    const customization = user.role === 'TEACHER' && user.teacherId
+      ? await this.prisma.teacherHtmlGame.findUnique({
+          where: { teacherId_htmlGameId: { teacherId: user.teacherId, htmlGameId: id } },
+          select: { id: true },
+        })
+      : null;
+    return this.mapGame(game, customization?.id);
   }
 
   async getPlay(id: string, user: AuthenticatedUser) {
-    const game = await this.prisma.htmlGame.findUnique({ where: { id } });
+    const game = await this.prisma.htmlGame.findUnique({
+      where: { id },
+      include: { questions: { orderBy: { order: 'asc' } } },
+    });
     if (!game || (user.role !== 'ADMIN' && game.status !== HtmlGameStatus.PUBLISHED)) {
       throw new NotFoundException('Không tìm thấy trò chơi HTML');
     }
@@ -77,8 +100,11 @@ export class HtmlGamesService {
       id: game.id,
       title: game.title,
       playUrl: this.objectStorage.getPublicUrl(entryKey),
-      sandbox: 'allow-scripts allow-forms',
+      sandbox: 'allow-scripts',
       referrerPolicy: 'no-referrer',
+      supportsQuestionConfig: game.supportsQuestionConfig,
+      configSchemaVersion: game.configSchemaVersion,
+      questions: game.supportsQuestionConfig ? game.questions : [],
     };
   }
 
@@ -98,6 +124,10 @@ export class HtmlGamesService {
         storagePrefix: `games/${id}/package-initial`,
         entryFile: 'index.html',
         status: HtmlGameStatus.DRAFT,
+        supportsQuestionConfig: dto.supportsQuestionConfig || false,
+        configSchemaVersion: dto.supportsQuestionConfig
+          ? dto.configSchemaVersion || HTML_GAME_CONFIG_SCHEMA_VERSION
+          : null,
         createdById: actor.userId,
       },
       include: GAME_INCLUDE,
@@ -126,6 +156,14 @@ export class HtmlGamesService {
         ? { connect: { id: dto.subjectId } }
         : { disconnect: true };
     }
+    if (dto.supportsQuestionConfig !== undefined) {
+      data.supportsQuestionConfig = dto.supportsQuestionConfig;
+      data.configSchemaVersion = dto.supportsQuestionConfig
+        ? dto.configSchemaVersion || HTML_GAME_CONFIG_SCHEMA_VERSION
+        : null;
+    } else if (dto.configSchemaVersion !== undefined) {
+      data.configSchemaVersion = dto.configSchemaVersion;
+    }
     const game = await this.prisma.htmlGame.update({
       where: { id },
       data,
@@ -143,6 +181,13 @@ export class HtmlGamesService {
     ) {
       throw new BadRequestException('Phải tải gói có index.html trước khi xuất bản');
     }
+    if (
+      dto.status === HtmlGameStatus.PUBLISHED &&
+      existing.supportsQuestionConfig &&
+      existing.configSchemaVersion !== HTML_GAME_CONFIG_SCHEMA_VERSION
+    ) {
+      throw new BadRequestException('Phiên bản cấu hình trò chơi không được hỗ trợ');
+    }
     const game = await this.prisma.htmlGame.update({
       where: { id },
       data: { status: dto.status },
@@ -154,6 +199,19 @@ export class HtmlGamesService {
   async uploadPackage(id: string, file: Express.Multer.File) {
     const game = await this.requireGame(id);
     const parsed = await this.packageService.parse(file);
+    return this.replacePackage(game, parsed);
+  }
+
+  async uploadSource(id: string, dto: HtmlGameSourceDto) {
+    const game = await this.requireGame(id);
+    return this.replacePackage(game, this.packageService.parseSource(dto.html));
+  }
+
+  private async replacePackage(
+    game: Awaited<ReturnType<HtmlGamesService['requireGame']>>,
+    parsed: { files: Array<{ relativePath: string; body: Buffer; contentType: string }>; totalSize: number },
+  ) {
+    const id = game.id;
     const nextStoragePrefix = `games/${id}/package-${randomUUID()}`;
     try {
       for (const item of parsed.files) {
@@ -210,7 +268,7 @@ export class HtmlGamesService {
     if (subjectId && !subject) throw new BadRequestException('Môn học không tồn tại');
   }
 
-  private mapGame(game: any) {
+  private mapGame(game: any, customizationId?: string) {
     return {
       id: game.id,
       title: game.title,
@@ -222,6 +280,9 @@ export class HtmlGamesService {
       subject: game.subject || null,
       entryFile: game.entryFile,
       status: game.status,
+      supportsQuestionConfig: game.supportsQuestionConfig,
+      configSchemaVersion: game.configSchemaVersion,
+      customizationId: customizationId || null,
       createdBy: game.createdBy || null,
       createdAt: game.createdAt,
       updatedAt: game.updatedAt,

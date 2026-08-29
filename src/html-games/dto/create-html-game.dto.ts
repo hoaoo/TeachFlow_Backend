@@ -1,6 +1,8 @@
 import { Type } from 'class-transformer';
 import {
   IsOptional,
+  IsBoolean,
+  IsInt,
   IsString,
   IsUrl,
   IsUUID,
@@ -43,4 +45,12 @@ export class CreateHtmlGameDto {
   @IsOptional()
   @IsUUID()
   subjectId?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  supportsQuestionConfig?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  configSchemaVersion?: number | null;
 }

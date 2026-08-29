@@ -306,6 +306,30 @@ export class LessonPlansController {
     return this.lessonPlansService.detachHtmlGame(id, htmlGameId, user.teacherId);
   }
 
+  @Post(':id/html-game-customizations/:customizationId')
+  @UseGuards(RolesGuard)
+  @Roles('TEACHER')
+  @ApiOperation({ summary: 'Gắn bản trò chơi tùy chỉnh của giáo viên vào giáo án' })
+  attachTeacherHtmlGame(
+    @Param('id') id: string,
+    @Param('customizationId') customizationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.attachTeacherHtmlGame(id, customizationId, user.teacherId);
+  }
+
+  @Delete(':id/html-game-customizations/:customizationId')
+  @UseGuards(RolesGuard)
+  @Roles('TEACHER')
+  @ApiOperation({ summary: 'Gỡ bản trò chơi tùy chỉnh khỏi giáo án' })
+  detachTeacherHtmlGame(
+    @Param('id') id: string,
+    @Param('customizationId') customizationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.detachTeacherHtmlGame(id, customizationId, user.teacherId);
+  }
+
   @Post(':id/resources/:resourceId')
   @ApiOperation({ summary: 'Đính kèm tài nguyên vào giáo án' })
   async attachResource(

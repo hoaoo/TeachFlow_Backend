@@ -27,6 +27,12 @@ describe('HtmlGamePackageService', () => {
     });
   });
 
+  it('rejects an HTML extension with an executable MIME', async () => {
+    const file = upload('lesson-game.html', Buffer.from('<h1>Game</h1>'));
+    file.mimetype = 'application/x-msdownload';
+    await expect(service.parse(file)).rejects.toThrow('MIME');
+  });
+
   it('accepts a ZIP with a root index and safe relative assets', async () => {
     const zip = new JSZip();
     zip.file('index.html', '<script src="assets/game.js"></script>');
@@ -69,5 +75,15 @@ describe('HtmlGamePackageService', () => {
     await expect(
       service.parse(upload('large.zip', await zip.generateAsync({ type: 'nodebuffer' }))),
     ).rejects.toThrow(PayloadTooLargeException);
+  });
+
+  it('parses pasted HTML as index.html without storing source in PostgreSQL', () => {
+    const result = service.parseSource('<!doctype html><title>Game</title>');
+    expect(result.files[0]).toMatchObject({ relativePath: 'index.html' });
+    expect(result.files[0].body.toString('utf8')).toContain('<title>Game</title>');
+  });
+
+  it('rejects oversized pasted HTML', () => {
+    expect(() => service.parseSource('x'.repeat(81 * 1024))).toThrow(PayloadTooLargeException);
   });
 });

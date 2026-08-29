@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TeachFlow configurable quiz example</title>
+</head>
+<body>
+  <main id="game">Đang chờ bộ câu hỏi từ TeachFlow…</main>
+  <!-- Replace API_ORIGIN with the deployed TeachFlow API origin. -->
+  <script src="API_ORIGIN/api/html-games/runtime/teachflow-game-runtime.js"></script>
+  <script>
+    TeachFlowGame.onConfig(({ questions }) => {
+      document.querySelector('#game').textContent = `Đã nhận ${questions.length} câu hỏi`;
+      // Render questions, collect answers, then call:
+      // TeachFlowGame.submitResult({ score: 1, total: questions.length, answers: [] });
+    });
+    TeachFlowGame.ready();
+  </script>
+</body>
+</html>

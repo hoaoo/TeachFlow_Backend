@@ -145,6 +145,45 @@ describe('LessonPlansService (Full Production Spec with Upload & Security)', () 
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      teacherHtmlGame: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'custom-1',
+          htmlGameId: 'game-1',
+          teacherId: 'teacher-1',
+          title: 'Bộ câu hỏi lớp 4A',
+          htmlGame: {
+            id: 'game-1',
+            title: 'Phép cộng vui',
+            status: 'PUBLISHED',
+            supportsQuestionConfig: true,
+            grade: null,
+            subject: null,
+          },
+        }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'custom-1', teacherId: 'teacher-1', htmlGameId: 'game-1',
+        }),
+      },
+      lessonPlanTeacherHtmlGame: {
+        upsert: jest.fn().mockResolvedValue({
+          teacherHtmlGame: {
+            id: 'custom-1',
+            teacherId: 'teacher-1',
+            title: 'Bộ câu hỏi lớp 4A',
+            updatedAt: new Date('2026-08-29T00:00:00Z'),
+            htmlGame: {
+              id: 'game-1',
+              title: 'Phép cộng vui',
+              status: 'PUBLISHED',
+              supportsQuestionConfig: true,
+              grade: null,
+              subject: null,
+            },
+          },
+        }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       teachingAssignment: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
@@ -442,5 +481,26 @@ describe('LessonPlansService (Full Production Spec with Upload & Security)', () 
       service.detachHtmlGame('lp-1', 'game-1', 'teacher-intruder'),
     ).rejects.toThrow(ForbiddenException);
     expect(prisma.lessonPlanHtmlGame.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('attaches the owning teacher customization without copying the HTML package', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+    const result = await service.attachTeacherHtmlGame('lp-1', 'custom-1', 'teacher-1');
+    expect(prisma.teacherHtmlGame.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'custom-1', teacherId: 'teacher-1' }) }),
+    );
+    expect(prisma.lessonPlanTeacherHtmlGame.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: { lessonPlanId: 'lp-1', teacherHtmlGameId: 'custom-1' } }),
+    );
+    expect(result.kind).toBe('CUSTOMIZATION');
+  });
+
+  it('rejects attaching another teacher customization to a lesson plan', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+    prisma.teacherHtmlGame.findFirst.mockResolvedValue(null);
+    await expect(
+      service.attachTeacherHtmlGame('lp-1', 'custom-other', 'teacher-1'),
+    ).rejects.toThrow(NotFoundException);
+    expect(prisma.lessonPlanTeacherHtmlGame.upsert).not.toHaveBeenCalled();
   });
 });
