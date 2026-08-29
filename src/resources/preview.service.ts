@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { pathToFileURL } from 'url';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
 
@@ -43,6 +44,34 @@ export class PreviewService {
     return null;
   }
 
+  async convertPowerPointToPdf(originalFilePath: string, outputDir: string): Promise<string> {
+    const binary = this.findLibreOfficeBinary();
+    if (!binary) throw new Error('LibreOffice is not configured');
+    const profileDir = path.join(outputDir, 'libreoffice-profile');
+    await fs.promises.mkdir(profileDir, { recursive: true });
+
+    await execFileAsync(
+      binary,
+      [
+        '--headless',
+        '--nologo',
+        '--nodefault',
+        '--nofirststartwizard',
+        `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
+        '--convert-to',
+        'pdf',
+        '--outdir',
+        outputDir,
+        originalFilePath,
+      ],
+      { timeout: 90000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+    );
+
+    const pdfName = (await fs.promises.readdir(outputDir)).find((file) => file.toLowerCase().endsWith('.pdf'));
+    if (!pdfName) throw new Error('LibreOffice did not produce a PDF');
+    return path.join(outputDir, pdfName);
+  }
+
   /**
    * Process preview generation asynchronously in background
    */
@@ -70,18 +99,8 @@ export class PreviewService {
           try {
             this.logger.log(`Attempting LibreOffice conversion for resource ${resourceId} using ${binary}`);
             // Use execFile with explicit arguments array to prevent any shell injection
-            await execFileAsync(
-              binary,
-              ['--headless', '--convert-to', 'pdf', '--outdir', tempDir, originalFilePath],
-              { timeout: 45000, maxBuffer: 10 * 1024 * 1024 },
-            );
-
-            const baseName = path.basename(originalFilePath, ext);
-            const convertedPdfPath = path.join(tempDir, `${baseName}.pdf`);
-
-            if (fs.existsSync(convertedPdfPath)) {
-              pdfBuffer = fs.readFileSync(convertedPdfPath);
-            }
+            const convertedPdfPath = await this.convertPowerPointToPdf(originalFilePath, tempDir);
+            pdfBuffer = await fs.promises.readFile(convertedPdfPath);
           } catch (convErr: any) {
             this.logger.warn(`LibreOffice conversion failed for ${resourceId}: ${convErr?.message}. Falling back to clean preview document.`);
           }

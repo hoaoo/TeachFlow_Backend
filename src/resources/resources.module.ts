@@ -4,12 +4,13 @@ import { ResourcesService } from './resources.service';
 import { StorageService } from './storage/storage.service';
 import { ObjectStorageService } from './storage/object-storage.service';
 import { PreviewService } from './preview.service';
+import { PresentationService } from './presentation.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [PrismaModule],
   controllers: [ResourcesController],
-  providers: [ResourcesService, StorageService, ObjectStorageService, PreviewService],
-  exports: [ResourcesService, StorageService, ObjectStorageService, PreviewService],
+  providers: [ResourcesService, StorageService, ObjectStorageService, PreviewService, PresentationService],
+  exports: [ResourcesService, StorageService, ObjectStorageService, PreviewService, PresentationService],
 })
 export class ResourcesModule {}

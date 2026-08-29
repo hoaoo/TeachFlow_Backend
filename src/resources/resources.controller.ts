@@ -16,6 +16,8 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  ParseIntPipe,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
@@ -42,11 +44,15 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { buildContentDisposition, sanitizeFilename } from '../export/export.utils';
+import { PresentationService } from './presentation.service';
 
 @ApiTags('Resources')
 @Controller('resources')
 export class ResourcesController {
-  constructor(private readonly resourcesService: ResourcesService) {}
+  constructor(
+    private readonly resourcesService: ResourcesService,
+    private readonly presentationService: PresentationService,
+  ) {}
 
   @Post('presign-upload')
   @HttpCode(HttpStatus.OK)
@@ -198,6 +204,35 @@ export class ResourcesController {
       resourceType,
       search,
     });
+  }
+
+  @Get(':id/presentation')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Chuẩn bị và lấy metadata trình chiếu PowerPoint' })
+  async getPresentation(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.presentationService.getPresentation(id, user);
+  }
+
+  @Get(':id/presentation/slides/:slideIndex')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Lấy một slide PowerPoint đã chuyển đổi và được bảo vệ' })
+  async getPresentationSlide(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('slideIndex', ParseIntPipe) slideIndex: number,
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() res: Response,
+  ) {
+    const slide = await this.presentationService.getSlide(id, slideIndex, user);
+    res.setHeader('Content-Type', slide.mimeType);
+    res.setHeader('Content-Length', slide.size);
+    res.setHeader('Content-Disposition', `inline; filename="slide-${String(slideIndex).padStart(3, '0')}.png"`);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return fs.createReadStream(slide.filePath).pipe(res);
   }
 
   @Get(':id')
@@ -360,6 +395,8 @@ export class ResourcesController {
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.resourcesService.remove(id, user);
+    const result = await this.resourcesService.remove(id, user);
+    await this.presentationService.deletePresentationCache(id);
+    return result;
   }
 }

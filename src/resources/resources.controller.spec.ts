@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ResourcesController } from './resources.controller';
 import { ResourcesService } from './resources.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PresentationService } from './presentation.service';
 
 describe('ResourcesController', () => {
   let controller: ResourcesController;
@@ -15,6 +16,11 @@ describe('ResourcesController', () => {
     update: jest.fn(),
     remove: jest.fn(),
   };
+  const mockPresentationService = {
+    getPresentation: jest.fn(),
+    getSlide: jest.fn(),
+    deletePresentationCache: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -25,6 +31,10 @@ describe('ResourcesController', () => {
         {
           provide: ResourcesService,
           useValue: mockResourcesService,
+        },
+        {
+          provide: PresentationService,
+          useValue: mockPresentationService,
         },
       ],
     })

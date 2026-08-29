@@ -28,6 +28,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
 
+# PowerPoint presentation conversion: PPT/PPTX -> PDF -> projector-ready PNG slides.
+RUN apk add --no-cache libreoffice-impress poppler-utils font-noto
+
 # Copy production dependencies and artifacts
 COPY --from=builder --chown=node:node /app/package*.json ./
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
