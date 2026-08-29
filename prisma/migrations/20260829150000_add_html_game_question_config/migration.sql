@@ -1,0 +1,2 @@
+ALTER TABLE "HtmlGame"
+ADD COLUMN IF NOT EXISTS "supportsQuestionConfig" BOOLEAN NOT NULL DEFAULT false;
