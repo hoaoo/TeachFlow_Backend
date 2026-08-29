@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -28,18 +28,18 @@ export class HtmlGamesController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.games.findOne(id, user);
   }
 
   @Get(':id/play')
-  play(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  play(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.games.getPlay(id, user);
   }
 
   @Post(':id/customizations')
   @Roles('TEACHER')
-  customize(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  customize(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.customizations.createOrGet(id, user.teacherId);
   }
 }

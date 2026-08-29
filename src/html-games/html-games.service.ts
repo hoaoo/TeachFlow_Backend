@@ -109,6 +109,9 @@ export class HtmlGamesService {
   }
 
   async create(dto: CreateHtmlGameDto, actor: AuthenticatedUser) {
+    if (!dto.title.trim()) {
+      throw new BadRequestException('TÃªn trÃ² chÆ¡i khÃ´ng Ä‘Æ°á»£c Ä‘á»ƒ trá»‘ng');
+    }
     await this.validateReferences(dto.gradeId, dto.subjectId);
     const id = randomUUID();
     const game = await this.prisma.htmlGame.create({
@@ -137,6 +140,9 @@ export class HtmlGamesService {
 
   async update(id: string, dto: UpdateHtmlGameDto) {
     await this.requireGame(id);
+    if (dto.title !== undefined && !dto.title.trim()) {
+      throw new BadRequestException('TÃªn trÃ² chÆ¡i khÃ´ng Ä‘Æ°á»£c Ä‘á»ƒ trá»‘ng');
+    }
     await this.validateReferences(dto.gradeId, dto.subjectId);
     const data: Prisma.HtmlGameUpdateInput = {};
     if (dto.title !== undefined) data.title = dto.title.trim();

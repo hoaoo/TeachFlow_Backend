@@ -7,19 +7,31 @@ export const TEACHFLOW_GAME_RUNTIME_SOURCE = String.raw`(function () {
   var parentOrigin = null;
   var currentConfig = null;
   var handlers = [];
+  var readySent = false;
 
   function messageSize(value) {
     try { return new TextEncoder().encode(JSON.stringify(value)).length; }
     catch (_) { return MAX_BYTES + 1; }
   }
 
-  function ready() {
+  function send(type, payload, requiresInit) {
     if (!gameInstanceId) throw new Error('Missing teachflowGameInstanceId');
-    window.parent.postMessage({
-      type: 'TEACHFLOW_GAME_READY',
+    if (requiresInit && !parentOrigin) {
+      throw new Error('Game has not received TEACHFLOW_GAME_INIT');
+    }
+    var message = Object.assign({
+      type: type,
       version: VERSION,
       gameInstanceId: gameInstanceId
-    }, '*');
+    }, payload || {});
+    if (messageSize(message) > MAX_BYTES) throw new Error('Oversized game bridge payload');
+    window.parent.postMessage(message, parentOrigin || '*');
+  }
+
+  function ready() {
+    if (readySent) return;
+    readySent = true;
+    send('TEACHFLOW_GAME_READY', null, false);
   }
 
   window.addEventListener('message', function (event) {
@@ -32,6 +44,7 @@ export const TEACHFLOW_GAME_RUNTIME_SOURCE = String.raw`(function () {
       data.gameInstanceId !== gameInstanceId ||
       !Array.isArray(data.questions)
     ) return;
+    if (parentOrigin && event.origin !== parentOrigin) return;
     parentOrigin = event.origin;
     currentConfig = Object.freeze({ questions: data.questions.slice() });
     handlers.slice().forEach(function (handler) { handler(currentConfig); });
@@ -46,20 +59,54 @@ export const TEACHFLOW_GAME_RUNTIME_SOURCE = String.raw`(function () {
       if (currentConfig) handler(currentConfig);
       return function () { handlers = handlers.filter(function (item) { return item !== handler; }); };
     },
-    submitResult: function (result) {
-      if (!parentOrigin) throw new Error('Game has not received TEACHFLOW_GAME_INIT');
+    start: function () {
+      send('TEACHFLOW_GAME_STARTED', { startedAt: Date.now() }, true);
+    },
+    submitAnswer: function (submission) {
+      if (
+        !submission ||
+        typeof submission !== 'object' ||
+        typeof submission.questionId !== 'string' ||
+        !submission.questionId ||
+        !Object.prototype.hasOwnProperty.call(submission, 'answer') ||
+        submission.answer === undefined
+      ) {
+        throw new Error('submitAnswer requires questionId and answer');
+      }
+      send('TEACHFLOW_GAME_ANSWER_SUBMITTED', {
+        questionId: submission.questionId,
+        answer: submission.answer,
+        submittedAt: Date.now()
+      }, true);
+    },
+    complete: function (result) {
       var payload = {
-        type: 'TEACHFLOW_GAME_RESULT',
-        version: VERSION,
-        gameInstanceId: gameInstanceId,
         score: Number(result && result.score),
         total: Number(result && result.total),
-        answers: Array.isArray(result && result.answers) ? result.answers : []
+        answers: Array.isArray(result && result.answers) ? result.answers : [],
+        completedAt: Date.now()
       };
-      if (!Number.isFinite(payload.score) || !Number.isFinite(payload.total) || messageSize(payload) > MAX_BYTES) {
-        throw new Error('Invalid or oversized result payload');
+      if (
+        !Number.isFinite(payload.score) ||
+        !Number.isFinite(payload.total) ||
+        payload.score < 0 ||
+        payload.total < 0 ||
+        payload.score > payload.total
+      ) {
+        throw new Error('Invalid game completion payload');
       }
-      window.parent.postMessage(payload, parentOrigin);
+      send('TEACHFLOW_GAME_COMPLETED', payload, true);
+    },
+    submitResult: function (result) {
+      this.complete(result);
     }
   });
+
+  if (gameInstanceId && window.parent !== window) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', ready, { once: true });
+    } else {
+      setTimeout(ready, 0);
+    }
+  }
 })();`;

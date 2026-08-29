@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthenticatedUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -20,18 +20,18 @@ export class TeacherHtmlGamesController {
   constructor(private readonly customizations: TeacherHtmlGamesService) {}
 
   @Get(':id')
-  get(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  get(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.customizations.get(id, user.teacherId);
   }
 
   @Get(':id/play')
-  play(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  play(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.customizations.getPlay(id, user);
   }
 
   @Patch(':id')
   update(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateTeacherHtmlGameDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
@@ -40,7 +40,7 @@ export class TeacherHtmlGamesController {
 
   @Post(':id/questions')
   createQuestion(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: CreateHtmlGameQuestionDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
@@ -49,8 +49,8 @@ export class TeacherHtmlGamesController {
 
   @Patch(':id/questions/:questionId')
   updateQuestion(
-    @Param('id') id: string,
-    @Param('questionId') questionId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('questionId', new ParseUUIDPipe({ version: '4' })) questionId: string,
     @Body() dto: UpdateHtmlGameQuestionDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
@@ -59,8 +59,8 @@ export class TeacherHtmlGamesController {
 
   @Delete(':id/questions/:questionId')
   removeQuestion(
-    @Param('id') id: string,
-    @Param('questionId') questionId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('questionId', new ParseUUIDPipe({ version: '4' })) questionId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.customizations.removeQuestion(id, questionId, user.teacherId);
@@ -68,7 +68,7 @@ export class TeacherHtmlGamesController {
 
   @Put(':id/questions/reorder')
   reorder(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: ReorderHtmlGameQuestionsDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {

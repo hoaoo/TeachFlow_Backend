@@ -1,6 +1,6 @@
 import {
   Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put,
-  UploadedFile, UseGuards, UseInterceptors,
+  UploadedFile, UseGuards, UseInterceptors, ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -45,7 +45,7 @@ export class AdminHtmlGamesController {
   }))
   @ApiOperation({ summary: 'Tải một tệp HTML hoặc gói ZIP an toàn' })
   uploadPackage(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
     return this.games.uploadPackage(id, file);
@@ -53,52 +53,55 @@ export class AdminHtmlGamesController {
 
   @Post(':id/source')
   @ApiOperation({ summary: 'Lưu mã HTML dán trực tiếp thành index.html trong object storage' })
-  uploadSource(@Param('id') id: string, @Body() dto: HtmlGameSourceDto) {
+  uploadSource(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: HtmlGameSourceDto) {
     return this.games.uploadSource(id, dto);
   }
 
   @Get(':id/questions')
-  listQuestions(@Param('id') id: string) {
+  listQuestions(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
     return this.questions.list(id);
   }
 
   @Post(':id/questions')
-  createQuestion(@Param('id') id: string, @Body() dto: CreateHtmlGameQuestionDto) {
+  createQuestion(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: CreateHtmlGameQuestionDto) {
     return this.questions.create(id, dto);
   }
 
   @Patch(':id/questions/:questionId')
   updateQuestion(
-    @Param('id') id: string,
-    @Param('questionId') questionId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('questionId', new ParseUUIDPipe({ version: '4' })) questionId: string,
     @Body() dto: UpdateHtmlGameQuestionDto,
   ) {
     return this.questions.update(id, questionId, dto);
   }
 
   @Delete(':id/questions/:questionId')
-  removeQuestion(@Param('id') id: string, @Param('questionId') questionId: string) {
+  removeQuestion(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('questionId', new ParseUUIDPipe({ version: '4' })) questionId: string,
+  ) {
     return this.questions.remove(id, questionId);
   }
 
   @Put(':id/questions/reorder')
-  reorderQuestions(@Param('id') id: string, @Body() dto: ReorderHtmlGameQuestionsDto) {
+  reorderQuestions(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: ReorderHtmlGameQuestionsDto) {
     return this.questions.reorder(id, dto);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateHtmlGameDto) {
+  update(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: UpdateHtmlGameDto) {
     return this.games.update(id, dto);
   }
 
   @Patch(':id/status')
-  updateStatus(@Param('id') id: string, @Body() dto: UpdateHtmlGameStatusDto) {
+  updateStatus(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: UpdateHtmlGameStatusDto) {
     return this.games.updateStatus(id, dto);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  remove(@Param('id') id: string) {
+  remove(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
     return this.games.remove(id);
   }
 }

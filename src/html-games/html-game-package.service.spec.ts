@@ -11,6 +11,7 @@ describe('HtmlGamePackageService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (config.get as jest.Mock).mockReset();
     service = new HtmlGamePackageService(config);
   });
 
@@ -20,11 +21,12 @@ describe('HtmlGamePackageService', () => {
   it('normalizes a standalone HTML file to the root entry file', async () => {
     const result = await service.parse(upload('lesson-game.html', Buffer.from('<h1>Game</h1>')));
 
-    expect(result.files).toHaveLength(1);
-    expect(result.files[0]).toMatchObject({
+    expect(result.files).toHaveLength(2);
+    expect(result.files.find((item) => item.relativePath === 'index.html')).toMatchObject({
       relativePath: 'index.html',
       contentType: 'text/html; charset=utf-8',
     });
+    expect(result.files.map((item) => item.relativePath)).toContain('teachflow-game-runtime.js');
   });
 
   it('rejects an HTML extension with an executable MIME', async () => {
@@ -43,6 +45,7 @@ describe('HtmlGamePackageService', () => {
     expect(result.files.map((item) => item.relativePath).sort()).toEqual([
       'assets/game.js',
       'index.html',
+      'teachflow-game-runtime.js',
     ]);
   });
 
@@ -81,6 +84,17 @@ describe('HtmlGamePackageService', () => {
     const result = service.parseSource('<!doctype html><title>Game</title>');
     expect(result.files[0]).toMatchObject({ relativePath: 'index.html' });
     expect(result.files[0].body.toString('utf8')).toContain('<title>Game</title>');
+    expect(result.files[0].body.toString('utf8')).toContain('data-teachflow-runtime="1"');
+    expect(result.files.map((item) => item.relativePath)).toContain('teachflow-game-runtime.js');
+  });
+
+  it('rewrites a configured external runtime reference to the trusted package runtime', () => {
+    const result = service.parseSource(
+      '<!doctype html><script src="https://api.example/api/html-games/runtime/teachflow-game-runtime.js"></script>',
+    );
+    const html = result.files.find((item) => item.relativePath === 'index.html')!.body.toString('utf8');
+    expect(html).toContain('src="./teachflow-game-runtime.js"');
+    expect(html).not.toContain('https://api.example');
   });
 
   it('rejects oversized pasted HTML', () => {

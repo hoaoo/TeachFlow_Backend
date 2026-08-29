@@ -193,4 +193,26 @@ describe('HtmlGamesService', () => {
       }),
     );
   });
+
+  it('persists question-config capability and schema version on create', async () => {
+    await service.create({
+      title: 'Game configurable',
+      supportsQuestionConfig: true,
+      configSchemaVersion: 1,
+    }, admin);
+
+    expect(prisma.htmlGame.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          supportsQuestionConfig: true,
+          configSchemaVersion: 1,
+        }),
+      }),
+    );
+  });
+
+  it('rejects a whitespace-only title as a validation error', async () => {
+    await expect(service.create({ title: '   ' }, admin)).rejects.toThrow(BadRequestException);
+    expect(prisma.htmlGame.create).not.toHaveBeenCalled();
+  });
 });

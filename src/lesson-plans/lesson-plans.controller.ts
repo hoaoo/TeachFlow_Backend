@@ -12,6 +12,7 @@ import {
   UploadedFile,
   Res,
   UseGuards,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -276,7 +277,7 @@ export class LessonPlansController {
   @Roles('TEACHER')
   @ApiOperation({ summary: 'Lấy danh sách trò chơi HTML đã xuất bản gắn với giáo án' })
   getAttachedHtmlGames(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.getAttachedHtmlGames(id, user.teacherId);
@@ -287,8 +288,8 @@ export class LessonPlansController {
   @Roles('TEACHER')
   @ApiOperation({ summary: 'Gắn trò chơi HTML đã xuất bản vào giáo án của giáo viên' })
   attachHtmlGame(
-    @Param('id') id: string,
-    @Param('htmlGameId') htmlGameId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('htmlGameId', new ParseUUIDPipe({ version: '4' })) htmlGameId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.attachHtmlGame(id, htmlGameId, user.teacherId);
@@ -299,8 +300,8 @@ export class LessonPlansController {
   @Roles('TEACHER')
   @ApiOperation({ summary: 'Gỡ trò chơi HTML khỏi giáo án của giáo viên' })
   detachHtmlGame(
-    @Param('id') id: string,
-    @Param('htmlGameId') htmlGameId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('htmlGameId', new ParseUUIDPipe({ version: '4' })) htmlGameId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.detachHtmlGame(id, htmlGameId, user.teacherId);
@@ -311,8 +312,8 @@ export class LessonPlansController {
   @Roles('TEACHER')
   @ApiOperation({ summary: 'Gắn bản trò chơi tùy chỉnh của giáo viên vào giáo án' })
   attachTeacherHtmlGame(
-    @Param('id') id: string,
-    @Param('customizationId') customizationId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('customizationId', new ParseUUIDPipe({ version: '4' })) customizationId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.attachTeacherHtmlGame(id, customizationId, user.teacherId);
@@ -323,8 +324,8 @@ export class LessonPlansController {
   @Roles('TEACHER')
   @ApiOperation({ summary: 'Gỡ bản trò chơi tùy chỉnh khỏi giáo án' })
   detachTeacherHtmlGame(
-    @Param('id') id: string,
-    @Param('customizationId') customizationId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('customizationId', new ParseUUIDPipe({ version: '4' })) customizationId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.lessonPlansService.detachTeacherHtmlGame(id, customizationId, user.teacherId);

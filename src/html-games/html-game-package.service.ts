@@ -13,6 +13,11 @@ import {
   DEFAULT_HTML_GAME_MAX_UPLOAD_BYTES,
   HTML_GAME_ALLOWED_EXTENSIONS,
 } from './html-game.constants';
+import { TEACHFLOW_GAME_RUNTIME_SOURCE } from './html-game-runtime';
+
+const HTML_GAME_RUNTIME_FILE = 'teachflow-game-runtime.js';
+const HTML_GAME_RUNTIME_TAG =
+  '<script src="./teachflow-game-runtime.js" data-teachflow-runtime="1"></script>';
 
 export interface ParsedHtmlGameFile {
   relativePath: string;
@@ -42,14 +47,11 @@ export class HtmlGamePackageService {
       if (!this.hasAllowedMime(file.mimetype, ['text/html', 'application/xhtml+xml'])) {
         throw new BadRequestException('MIME của tệp HTML không hợp lệ');
       }
-      return {
-        files: [{
+      return this.withRuntime([{
           relativePath: 'index.html',
           contentType: 'text/html; charset=utf-8',
           body: file.buffer,
-        }],
-        totalSize: file.buffer.length,
-      };
+        }]);
     }
     if (extension !== '.zip') {
       throw new BadRequestException('Chỉ chấp nhận một tệp .html hoặc gói .zip');
@@ -122,7 +124,7 @@ export class HtmlGamePackageService {
     if (!entryFile?.body.length) {
       throw new BadRequestException('index.html không được để trống');
     }
-    return { files, totalSize: actualTotal };
+    return this.withRuntime(files);
   }
 
   parseSource(html: string): ParsedHtmlGamePackage {
@@ -134,14 +136,48 @@ export class HtmlGamePackageService {
     if (body.length > DEFAULT_HTML_GAME_MAX_SOURCE_BYTES) {
       throw new PayloadTooLargeException('Mã HTML dán trực tiếp vượt quá giới hạn 80 KB');
     }
-    return {
-      files: [{
+    return this.withRuntime([{
         relativePath: 'index.html',
         contentType: 'text/html; charset=utf-8',
         body,
-      }],
-      totalSize: body.length,
-    };
+      }]);
+  }
+
+  private withRuntime(files: ParsedHtmlGameFile[]): ParsedHtmlGamePackage {
+    const runtimeBody = Buffer.from(TEACHFLOW_GAME_RUNTIME_SOURCE, 'utf8');
+    const normalized = files
+      .filter((item) => item.relativePath !== HTML_GAME_RUNTIME_FILE)
+      .map((item) => item.relativePath === 'index.html'
+        ? { ...item, body: Buffer.from(this.injectRuntime(item.body.toString('utf8')), 'utf8') }
+        : item);
+    normalized.push({
+      relativePath: HTML_GAME_RUNTIME_FILE,
+      contentType: 'text/javascript; charset=utf-8',
+      body: runtimeBody,
+    });
+    const totalSize = normalized.reduce((total, item) => total + item.body.length, 0);
+    if (totalSize > this.maxExtractedBytes) {
+      throw new PayloadTooLargeException(
+        'HTML game package exceeds the extracted-size limit after adding the runtime',
+      );
+    }
+    return { files: normalized, totalSize };
+  }
+
+  private injectRuntime(html: string): string {
+    const existingRuntime = /<script\b[^>]*\bsrc=["'][^"']*teachflow-game-runtime\.js[^"']*["'][^>]*><\/script>/i;
+    if (existingRuntime.test(html)) {
+      return html.replace(existingRuntime, HTML_GAME_RUNTIME_TAG);
+    }
+    const head = /<head(?:\s[^>]*)?>/i;
+    if (head.test(html)) {
+      return html.replace(head, (match) => `${match}\n  ${HTML_GAME_RUNTIME_TAG}`);
+    }
+    const doctype = /<!doctype\s+html[^>]*>/i;
+    if (doctype.test(html)) {
+      return html.replace(doctype, (match) => `${match}\n${HTML_GAME_RUNTIME_TAG}`);
+    }
+    return `${HTML_GAME_RUNTIME_TAG}\n${html}`;
   }
 
   private hasAllowedMime(actual: string | undefined, allowed: string[]): boolean {
