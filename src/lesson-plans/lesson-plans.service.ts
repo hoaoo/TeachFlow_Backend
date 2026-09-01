@@ -16,6 +16,7 @@ import { AuditService } from '../common/audit/audit.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { StorageService } from '../resources/storage/storage.service';
 import { lessonPlanToRenderModel, LessonPlanRenderModel } from '../export/render-models';
+import { DocxParserService, ParsedLessonPlan } from './docx-parser.service';
 import { CreateLessonPlanDto } from './dto/create-lesson-plan.dto';
 import { UpdateLessonPlanDto } from './dto/update-lesson-plan.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
@@ -40,6 +41,7 @@ export class LessonPlansService {
     private assignmentAuth: TeachingAssignmentAuthorizationService,
     private storageService: StorageService,
     private configService: ConfigService,
+    private docxParser: DocxParserService,
     @Optional() private auditService?: AuditService,
   ) {}
 
@@ -430,20 +432,31 @@ export class LessonPlansService {
       }
     }
 
-    // 5. Save file physically to storage
+    // 5. Parse DOCX content if it is a DOCX file
+    let parsedDocx: ParsedLessonPlan | null = null;
+    if (ext === '.docx') {
+      try {
+        parsedDocx = await this.docxParser.parse(file.buffer);
+      } catch (parseErr: any) {
+        this.logger.warn(`DOCX parse failed for ${sanitizedOriginalName}, falling back to default structured template: ${parseErr?.message}`);
+      }
+    }
+
+    // 6. Save file physically to storage
     const stored = await this.storageService.saveFile(file, ext);
 
     try {
       // Determine title
       const title =
         dto.title?.trim() ||
+        parsedDocx?.title ||
         path.basename(sanitizedOriginalName, ext).trim() ||
         'Giáo án tải lên';
 
       let effectiveClassroomId = dto.classroomId || null;
       let effectiveSubjectId = dto.subjectId || null;
-      let effectiveSubjectName = dto.subject || 'Toán';
-      let effectiveGradeName = dto.grade || 'Lớp 4A';
+      let effectiveSubjectName = dto.subject || parsedDocx?.subjectName || 'Toán';
+      let effectiveGradeName = dto.grade || parsedDocx?.gradeName || 'Lớp 4A';
 
       if (dto.classroomId) {
         const cls = await this.prisma.classroom.findUnique({
@@ -460,13 +473,18 @@ export class LessonPlansService {
           data: {
             teacherId,
             title,
-            topic: dto.topic?.trim() || null,
+            topic: dto.topic?.trim() || parsedDocx?.topic || null,
             subjectName: effectiveSubjectName,
             gradeName: effectiveGradeName,
             teachingDate: dto.date ? new Date(dto.date) : new Date(),
-            durationMinutes: 40,
-            objectives: 'Giáo án được tải lên từ tập tin gốc.',
-            notes: dto.notes?.trim() || null,
+            durationMinutes: parsedDocx?.durationMinutes || 40,
+            objectives: parsedDocx?.objectives || 'Giáo án được tải lên từ tập tin gốc.',
+            specificCompetencies: parsedDocx?.specificCompetencies || null,
+            generalCompetencies: parsedDocx?.generalCompetencies || null,
+            qualities: parsedDocx?.qualities || null,
+            teachingEquipment: parsedDocx?.teachingEquipment || null,
+            postLessonAdjustment: parsedDocx?.postLessonAdjustment || null,
+            notes: dto.notes?.trim() || parsedDocx?.notes || null,
             classroomId: effectiveClassroomId,
             subjectId: effectiveSubjectId,
             status: 'COMPLETED',
@@ -479,6 +497,32 @@ export class LessonPlansService {
             version: 1,
           },
         });
+
+        // Insert structured activities if parsed from DOCX
+        if (parsedDocx && parsedDocx.activities && parsedDocx.activities.length > 0) {
+          await Promise.all(
+            parsedDocx.activities.map((act, index) =>
+              tx.lessonPlanActivity.create({
+                data: {
+                  lessonPlanId: created.id,
+                  activityType: this.mapPhaseToActivityType(act.phase) as any,
+                  phase: act.phase || 'Hoạt động',
+                  title: act.title,
+                  durationMinutes: act.durationMinutes || 5,
+                  method: act.method || '',
+                  technique: act.technique || '',
+                  competencies: act.competencies || '',
+                  qualities: act.qualities || '',
+                  equipment: act.equipment || null,
+                  objective: act.objective || '',
+                  teacherActivity: act.teacherActivity || '',
+                  studentActivity: act.studentActivity || '',
+                  sortOrder: act.sortOrder ?? index,
+                },
+              }),
+            ),
+          );
+        }
 
         if (dto.scheduleId) {
           await tx.schedule.update({
@@ -497,6 +541,7 @@ export class LessonPlansService {
               sourceType: 'UPLOADED',
               originalFileName: sanitizedOriginalName,
               fileSize: stored.size,
+              activitiesCount: parsedDocx?.activities?.length || 0,
             }),
             changeSummary: `Tải lên file ${sanitizedOriginalName}`,
             createdById: teacherId,
@@ -526,6 +571,114 @@ export class LessonPlansService {
       } catch (cleanErr) {
         this.logger.warn(`Failed to clean up stored file ${stored.storedFileName} after DB error`);
       }
+      throw err;
+    }
+  }
+
+  async importDocx(id: string, file: Express.Multer.File, teacherId: string) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn tập tin DOCX để nhập');
+    }
+
+    const rawName = file.originalname || 'imported_lesson_plan.docx';
+    const sanitizedOriginalName = path.basename(rawName).replace(/[\r\n\t]/g, '');
+    const ext = path.extname(sanitizedOriginalName).toLowerCase();
+    if (ext !== '.docx') {
+      throw new BadRequestException('Chỉ chấp nhận tập tin Microsoft Word (.docx)');
+    }
+
+    const existing = await this.prisma.lessonPlan.findUnique({
+      where: { id },
+      include: { teachingAssignment: true },
+    });
+
+    if (!existing || existing.deletedAt) {
+      throw new NotFoundException(`Không tìm thấy giáo án với mã ${id}`);
+    }
+
+    const planTeacherId = existing.teachingAssignment?.teacherId || existing.teacherId;
+    if (teacherId && planTeacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền cập nhật giáo án này');
+    }
+
+    const parsed = await this.docxParser.parse(file.buffer);
+    const stored = await this.storageService.saveFile(file, '.docx');
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const nextVersion = existing.version + 1;
+        await tx.lessonPlan.update({
+          where: { id },
+          data: {
+            title: parsed.title || existing.title,
+            topic: parsed.topic || existing.topic,
+            subjectName: parsed.subjectName || existing.subjectName,
+            gradeName: parsed.gradeName || existing.gradeName,
+            durationMinutes: parsed.durationMinutes || existing.durationMinutes,
+            objectives: parsed.objectives || existing.objectives,
+            specificCompetencies: parsed.specificCompetencies || existing.specificCompetencies,
+            generalCompetencies: parsed.generalCompetencies || existing.generalCompetencies,
+            qualities: parsed.qualities || existing.qualities,
+            teachingEquipment: parsed.teachingEquipment || existing.teachingEquipment,
+            postLessonAdjustment: parsed.postLessonAdjustment || existing.postLessonAdjustment,
+            notes: parsed.notes || existing.notes,
+            originalFileName: sanitizedOriginalName,
+            storedFileName: stored.storedFileName,
+            storagePath: stored.storagePath,
+            fileSize: stored.size,
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            version: nextVersion,
+          },
+        });
+
+        // Replace activities
+        await tx.lessonPlanActivity.deleteMany({ where: { lessonPlanId: id } });
+        if (parsed.activities && parsed.activities.length > 0) {
+          await Promise.all(
+            parsed.activities.map((act, index) =>
+              tx.lessonPlanActivity.create({
+                data: {
+                  lessonPlanId: id,
+                  activityType: this.mapPhaseToActivityType(act.phase) as any,
+                  phase: act.phase || 'Hoạt động',
+                  title: act.title,
+                  durationMinutes: act.durationMinutes || 5,
+                  method: act.method || '',
+                  technique: act.technique || '',
+                  competencies: act.competencies || '',
+                  qualities: act.qualities || '',
+                  equipment: act.equipment || null,
+                  objective: act.objective || '',
+                  teacherActivity: act.teacherActivity || '',
+                  studentActivity: act.studentActivity || '',
+                  sortOrder: act.sortOrder ?? index,
+                },
+              }),
+            ),
+          );
+        }
+
+        await tx.lessonPlanVersion.create({
+          data: {
+            lessonPlanId: id,
+            versionNumber: nextVersion,
+            title: parsed.title || existing.title,
+            contentSnapshot: JSON.stringify({
+              title: parsed.title || existing.title,
+              importedFrom: sanitizedOriginalName,
+              activitiesCount: parsed.activities.length,
+            }),
+            changeSummary: `Nhập lại nội dung từ file DOCX ${sanitizedOriginalName}`,
+            createdById: teacherId,
+          },
+        });
+      });
+
+      return this.findOne(id, teacherId);
+    } catch (err) {
+      try {
+        await this.storageService.deleteFile(stored.storedFileName);
+      } catch {}
       throw err;
     }
   }

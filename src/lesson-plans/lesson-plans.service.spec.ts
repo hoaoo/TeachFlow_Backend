@@ -11,6 +11,7 @@ import { LessonPlansService } from './lesson-plans.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TeachingAssignmentAuthorizationService } from '../common/services/teaching-assignment-authorization.service';
 import { StorageService } from '../resources/storage/storage.service';
+import { DocxParserService } from './docx-parser.service';
 
 describe('LessonPlansService (Full Production Spec with Upload & Security)', () => {
   let service: LessonPlansService;
@@ -218,6 +219,7 @@ describe('LessonPlansService (Full Production Spec with Upload & Security)', () 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LessonPlansService,
+        DocxParserService,
         {
           provide: PrismaService,
           useValue: prisma,
@@ -503,4 +505,30 @@ describe('LessonPlansService (Full Production Spec with Upload & Security)', () 
     ).rejects.toThrow(NotFoundException);
     expect(prisma.lessonPlanTeacherHtmlGame.upsert).not.toHaveBeenCalled();
   });
+
+  it('rejects importDocx when non-docx file is provided', async () => {
+    const file = {
+      originalname: 'lesson.pdf',
+      buffer: Buffer.from('pdf data'),
+      size: 100,
+    } as any;
+
+    await expect(service.importDocx('lp-1', file, 'teacher-1')).rejects.toThrow(
+      'Chỉ chấp nhận tập tin Microsoft Word (.docx)',
+    );
+  });
+
+  it('rejects importDocx on another teacher lesson plan (IDOR protection)', async () => {
+    jest.spyOn(prisma.lessonPlan, 'findUnique').mockResolvedValue(mockPlan as any);
+    const file = {
+      originalname: 'lesson.docx',
+      buffer: Buffer.from('docx data'),
+      size: 100,
+    } as any;
+
+    await expect(service.importDocx('lp-1', file, 'teacher-intruder')).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
 });
+

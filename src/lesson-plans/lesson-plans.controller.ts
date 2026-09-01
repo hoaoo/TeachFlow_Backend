@@ -91,6 +91,26 @@ export class LessonPlansController {
     return this.lessonPlansService.uploadLessonPlan(file, dto, user.teacherId);
   }
 
+  @Post(':id/import-docx')
+  @ApiOperation({ summary: 'Nhập lại nội dung giáo án từ tệp Microsoft Word (.docx)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async importDocx(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.lessonPlansService.importDocx(id, file, user.teacherId);
+  }
+
   @Post('preview')
   @ApiOperation({ summary: 'Xem trước giáo án chưa lưu (JSON render model dùng chung với Word/PDF)' })
   async previewDraft(

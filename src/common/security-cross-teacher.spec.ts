@@ -19,6 +19,7 @@ import { TeachingAssignmentAuthorizationService } from './services/teaching-assi
 import { AcademicCalculationService } from '../assessments/academic-calculation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
+import { DocxParserService } from '../lesson-plans/docx-parser.service';
 
 describe('Cross-Teacher IDOR Absolute Data Isolation Test Suite', () => {
   const teacherAId = 'teacher-A-id';
@@ -114,6 +115,7 @@ describe('Cross-Teacher IDOR Absolute Data Isolation Test Suite', () => {
         AssessmentsService,
         AcademicCalculationService,
         LessonPlansService,
+        DocxParserService,
         WorksheetsService,
         ResourcesService,
         NotificationsService,

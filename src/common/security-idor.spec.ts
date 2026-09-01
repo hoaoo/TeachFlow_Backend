@@ -19,6 +19,7 @@ import { StorageService } from '../resources/storage/storage.service';
 import { PreviewService } from '../resources/preview.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
+import { DocxParserService } from '../lesson-plans/docx-parser.service';
 
 import { TeachingAssignmentAuthorizationService } from './services/teaching-assignment-authorization.service';
 
@@ -128,6 +129,7 @@ describe('Security IDOR & Cross-Teacher Isolation Invariant Tests', () => {
         TeachingAssignmentAuthorizationService,
         ClassroomsService,
         LessonPlansService,
+        DocxParserService,
         WorksheetsService,
         StudentsService,
         StudentCommentsService,
