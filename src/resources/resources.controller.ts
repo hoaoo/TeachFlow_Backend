@@ -44,6 +44,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { buildContentDisposition, sanitizeFilename } from '../export/export.utils';
+import { MIME_TYPE_MAP } from './resources.validator';
 import { PresentationService } from './presentation.service';
 
 @ApiTags('Resources')
@@ -110,7 +111,11 @@ export class ResourcesController {
     const ext = (fileInfo.originalFileName || fileKey).split('.').pop() || 'dat';
     const baseWithoutExt = (fileInfo.originalFileName || fileKey).replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
-    const contentType = fileInfo.mimeType || 'application/octet-stream';
+    const extKey = `.${ext.toLowerCase()}`;
+    const mappedMime = (MIME_TYPE_MAP as Record<string, string[]>)[extKey]?.[0];
+    const contentType = (!fileInfo.mimeType || fileInfo.mimeType === 'application/octet-stream')
+      ? (mappedMime || 'application/octet-stream')
+      : fileInfo.mimeType;
 
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -260,8 +265,13 @@ export class ResourcesController {
     const ext = fileInfo.originalFileName.split('.').pop() || 'dat';
     const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
+    const extKey = `.${ext.toLowerCase()}`;
+    const mappedMime = (MIME_TYPE_MAP as Record<string, string[]>)[extKey]?.[0];
+    const contentType = (!fileInfo.mimeType || fileInfo.mimeType === 'application/octet-stream')
+      ? (mappedMime || 'application/octet-stream')
+      : fileInfo.mimeType;
 
-    res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', buildContentDisposition(asciiFilename, utf8Filename, 'attachment'));
     res.setHeader('Accept-Ranges', 'bytes');
     if (fileInfo.size) {
@@ -290,7 +300,11 @@ export class ResourcesController {
     const ext = fileInfo.originalFileName.split('.').pop() || 'dat';
     const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
-    const contentType = fileInfo.mimeType || 'application/octet-stream';
+    const extKey = `.${ext.toLowerCase()}`;
+    const mappedMime = (MIME_TYPE_MAP as Record<string, string[]>)[extKey]?.[0];
+    const contentType = (!fileInfo.mimeType || fileInfo.mimeType === 'application/octet-stream')
+      ? (mappedMime || 'application/octet-stream')
+      : fileInfo.mimeType;
 
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -336,7 +350,9 @@ export class ResourcesController {
     const ext = fileInfo.originalFileName.split('.').pop() || 'pdf';
     const baseWithoutExt = fileInfo.originalFileName.replace(/\.[^.]+$/, '');
     const { asciiFilename, utf8Filename } = sanitizeFilename(baseWithoutExt, ext);
-    const contentType = fileInfo.mimeType || 'application/pdf';
+    const extKey = `.${ext.toLowerCase()}`;
+    const mappedMime = (MIME_TYPE_MAP as Record<string, string[]>)[extKey]?.[0];
+    const contentType = fileInfo.mimeType || mappedMime || 'application/pdf';
 
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');

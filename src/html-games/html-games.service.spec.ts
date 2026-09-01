@@ -97,7 +97,7 @@ describe('HtmlGamesService', () => {
       id: game.id,
       title: game.title,
       playUrl: 'https://games.example/games/game-1/index.html',
-      sandbox: 'allow-scripts',
+      sandbox: 'allow-scripts allow-forms allow-pointer-lock',
       referrerPolicy: 'no-referrer',
       supportsQuestionConfig: false,
       configSchemaVersion: null,

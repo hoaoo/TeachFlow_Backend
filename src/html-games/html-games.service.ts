@@ -100,7 +100,7 @@ export class HtmlGamesService {
       id: game.id,
       title: game.title,
       playUrl: this.objectStorage.getPublicUrl(entryKey),
-      sandbox: 'allow-scripts',
+      sandbox: 'allow-scripts allow-forms allow-pointer-lock',
       referrerPolicy: 'no-referrer',
       supportsQuestionConfig: game.supportsQuestionConfig,
       configSchemaVersion: game.configSchemaVersion,
