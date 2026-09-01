@@ -87,6 +87,16 @@ export function validateEnvironment(): ValidatedEnvironment {
     if (accessSecret === refreshSecret) {
       throw new Error('Startup validation failed: JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must not be identical');
     }
+
+    const apiBaseUrl = process.env.API_BASE_URL?.trim();
+    if (apiBaseUrl && !apiBaseUrl.startsWith('https://')) {
+      throw new Error('Startup validation failed: API_BASE_URL must use HTTPS in production');
+    }
+
+    const objectStoragePublicUrl = process.env.OBJECT_STORAGE_PUBLIC_BASE_URL?.trim();
+    if (objectStoragePublicUrl && !objectStoragePublicUrl.startsWith('https://')) {
+      throw new Error('Startup validation failed: OBJECT_STORAGE_PUBLIC_BASE_URL must use HTTPS in production');
+    }
   }
 
   // Safe development fallback secrets for local non-prod testing only

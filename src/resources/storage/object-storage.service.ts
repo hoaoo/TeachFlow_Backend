@@ -1,5 +1,7 @@
 import {
   DeleteObjectsCommand,
+  GetObjectCommand,
+  GetObjectCommandOutput,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -166,8 +168,36 @@ export class ObjectStorageService {
     }
   }
 
-  async getLocalFileStream(key: string): Promise<LocalFileStreamInfo> {
+  async getFileStream(key: string): Promise<LocalFileStreamInfo> {
     const safeKey = this.assertSafeKey(key);
+    const ext = path.extname(safeKey).toLowerCase();
+    const defaultContentType = MIME_MAP[ext] || 'application/octet-stream';
+
+    if (this.isS3Configured()) {
+      const { client, bucket } = this.connection();
+      try {
+        const response: GetObjectCommandOutput = await client.send(new GetObjectCommand({
+          Bucket: bucket,
+          Key: safeKey,
+        }));
+        if (!response.Body) {
+          throw new NotFoundException('Không tìm thấy tệp trò chơi');
+        }
+        return {
+          stream: response.Body as any,
+          contentType: response.ContentType || defaultContentType,
+          size: response.ContentLength || 0,
+        };
+      } catch (error: any) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (status === 404 || error?.name === 'NotFound' || error?.name === 'NoSuchKey') {
+          throw new NotFoundException('Không tìm thấy tệp trò chơi');
+        }
+        throw error;
+      }
+    }
+
+    // Local storage driver
     const fullPath = path.join(this.localDir, safeKey);
     if (!fullPath.startsWith(this.localDir) || !fs.existsSync(fullPath)) {
       throw new NotFoundException('Không tìm thấy tệp trò chơi');
@@ -176,13 +206,15 @@ export class ObjectStorageService {
     if (stat.isDirectory()) {
       throw new NotFoundException('Không tìm thấy tệp trò chơi');
     }
-    const ext = path.extname(safeKey).toLowerCase();
-    const contentType = MIME_MAP[ext] || 'application/octet-stream';
     return {
       stream: fs.createReadStream(fullPath),
-      contentType,
+      contentType: defaultContentType,
       size: stat.size,
     };
+  }
+
+  async getLocalFileStream(key: string): Promise<LocalFileStreamInfo> {
+    return this.getFileStream(key);
   }
 
   getPublicUrl(key: string): string {
@@ -191,14 +223,22 @@ export class ObjectStorageService {
     let baseUrl = configuredBase;
 
     if (!baseUrl) {
-      if (this.isS3Configured()) {
-        throw new InternalServerErrorException(
-          'OBJECT_STORAGE_PUBLIC_BASE_URL chưa được cấu hình cho miền chạy trò chơi',
-        );
-      }
       const apiBase = (this.config.get<string>('API_BASE_URL') || '').trim().replace(/\/+$/, '');
-      const host = apiBase || `http://localhost:${this.config.get<string>('PORT') || 3001}`;
-      baseUrl = `${host}/api/html-games/public`;
+      const renderHost = (this.config.get<string>('RENDER_EXTERNAL_HOSTNAME') || '').trim();
+
+      let host = apiBase;
+      if (!host && renderHost) {
+        host = `https://${renderHost}`;
+      }
+      if (!host) {
+        if (this.config.get<string>('NODE_ENV') === 'production') {
+          throw new InternalServerErrorException(
+            'API_BASE_URL hoặc OBJECT_STORAGE_PUBLIC_BASE_URL phải được cấu hình với HTTPS trong production',
+          );
+        }
+        host = `http://localhost:${this.config.get<string>('PORT') || 3001}`;
+      }
+      baseUrl = `${host.replace(/\/+$/, '')}/api/html-games/public`;
     }
 
     let parsedBaseUrl: URL;
@@ -206,37 +246,18 @@ export class ObjectStorageService {
       parsedBaseUrl = new URL(baseUrl);
     } catch {
       throw new InternalServerErrorException(
-        'OBJECT_STORAGE_PUBLIC_BASE_URL phải là một URL HTTP(S) tuyệt đối',
+        'Miền chạy trò chơi HTML phải là một URL HTTP(S) tuyệt đối',
       );
     }
     if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) {
       throw new InternalServerErrorException(
-        'OBJECT_STORAGE_PUBLIC_BASE_URL phải là một URL HTTP(S) tuyệt đối',
+        'Miền chạy trò chơi HTML phải là một URL HTTP(S) tuyệt đối',
       );
     }
     if (this.config.get<string>('NODE_ENV') === 'production') {
       if (parsedBaseUrl.protocol !== 'https:') {
         throw new InternalServerErrorException(
           'Miền chạy trò chơi HTML phải sử dụng HTTPS trong production',
-        );
-      }
-      const applicationOrigins = [
-        this.config.get<string>('FRONTEND_URL'),
-        this.config.get<string>('API_BASE_URL'),
-      ]
-        .flatMap((value) => String(value || '').split(','))
-        .map((value) => value.trim())
-        .filter(Boolean)
-        .map((value) => {
-          try {
-            return new URL(value).origin;
-          } catch {
-            return null;
-          }
-        });
-      if (applicationOrigins.includes(parsedBaseUrl.origin)) {
-        throw new InternalServerErrorException(
-          'Miền chạy trò chơi HTML phải tách biệt với miền ứng dụng và API',
         );
       }
     }

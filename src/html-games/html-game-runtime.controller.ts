@@ -21,10 +21,10 @@ export class HtmlGameRuntimeController {
   @Get('public/*')
   async servePublicFile(@Req() req: Request, @Res() res: Response) {
     const rawPath = (req.params as any)[0] || '';
-    const fileInfo = await this.objectStorage.getLocalFileStream(rawPath);
+    const fileInfo = await this.objectStorage.getFileStream(rawPath);
     res.writeHead(HttpStatus.OK, {
       'Content-Type': fileInfo.contentType,
-      'Content-Length': fileInfo.size,
+      ...(fileInfo.size > 0 ? { 'Content-Length': fileInfo.size } : {}),
       'Cache-Control': 'public, max-age=3600',
       'X-Content-Type-Options': 'nosniff',
     });

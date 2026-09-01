@@ -22,20 +22,40 @@ describe('ObjectStorageService public game URLs', () => {
     expect(() => service.getPublicUrl('games/../secret')).toThrow(InternalServerErrorException);
   });
 
-  it('requires a separate HTTPS game origin in production', () => {
+  it('requires HTTPS in production', () => {
     const insecure = create({
       NODE_ENV: 'production',
-      FRONTEND_URL: 'https://app.example.edu',
       OBJECT_STORAGE_PUBLIC_BASE_URL: 'http://games.example.edu',
     });
-    const sameOrigin = create({
+    const insecureApi = create({
       NODE_ENV: 'production',
-      FRONTEND_URL: 'https://app.example.edu',
-      OBJECT_STORAGE_PUBLIC_BASE_URL: 'https://app.example.edu/games',
+      API_BASE_URL: 'http://api.example.edu',
     });
 
     expect(() => insecure.getPublicUrl('games/game-1/index.html')).toThrow('HTTPS');
-    expect(() => sameOrigin.getPublicUrl('games/game-1/index.html')).toThrow('tách biệt');
+    expect(() => insecureApi.getPublicUrl('games/game-1/index.html')).toThrow('HTTPS');
+  });
+
+  it('allows backend HTTPS route in production', () => {
+    const prodService = create({
+      NODE_ENV: 'production',
+      API_BASE_URL: 'https://hoan-dev081202.onrender.com',
+    });
+
+    expect(prodService.getPublicUrl('games/game-1/index.html')).toBe(
+      'https://hoan-dev081202.onrender.com/api/html-games/public/games/game-1/index.html',
+    );
+  });
+
+  it('resolves Render external hostname to HTTPS in production', () => {
+    const renderService = create({
+      NODE_ENV: 'production',
+      RENDER_EXTERNAL_HOSTNAME: 'hoan-dev081202.onrender.com',
+    });
+
+    expect(renderService.getPublicUrl('games/game-1/index.html')).toBe(
+      'https://hoan-dev081202.onrender.com/api/html-games/public/games/game-1/index.html',
+    );
   });
 
   it('falls back to local public URL when S3 is not configured in dev', () => {
