@@ -98,6 +98,6 @@ describe('HtmlGamePackageService', () => {
   });
 
   it('rejects oversized pasted HTML', () => {
-    expect(() => service.parseSource('x'.repeat(81 * 1024))).toThrow(PayloadTooLargeException);
+    expect(() => service.parseSource('x'.repeat(2 * 1024 * 1024 + 1))).toThrow(PayloadTooLargeException);
   });
 });

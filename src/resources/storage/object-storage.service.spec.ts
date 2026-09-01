@@ -37,4 +37,39 @@ describe('ObjectStorageService public game URLs', () => {
     expect(() => insecure.getPublicUrl('games/game-1/index.html')).toThrow('HTTPS');
     expect(() => sameOrigin.getPublicUrl('games/game-1/index.html')).toThrow('tách biệt');
   });
+
+  it('falls back to local public URL when S3 is not configured in dev', () => {
+    const devService = create({
+      NODE_ENV: 'development',
+      API_BASE_URL: 'http://localhost:3001',
+    });
+
+    expect(devService.getPublicUrl('games/game-1/package-123/index.html')).toBe(
+      'http://localhost:3001/api/html-games/public/games/game-1/package-123/index.html',
+    );
+  });
+
+  it('supports local disk put, exists, getStream, and deletePrefix', async () => {
+    const devService = create({
+      NODE_ENV: 'development',
+      RESOURCE_UPLOAD_DIR: 'uploads/test-resources',
+    });
+
+    const key = `test-game-${Date.now()}/index.html`;
+    await devService.putObject({
+      key,
+      body: Buffer.from('<!doctype html><h1>Test</h1>'),
+      contentType: 'text/html; charset=utf-8',
+    });
+
+    expect(await devService.objectExists(key)).toBe(true);
+
+    const streamInfo = await devService.getLocalFileStream(key);
+    expect(streamInfo.contentType).toBe('text/html; charset=utf-8');
+    expect(streamInfo.size).toBeGreaterThan(0);
+
+    const prefix = key.split('/')[0];
+    await devService.deletePrefix(prefix);
+    expect(await devService.objectExists(key)).toBe(false);
+  });
 });

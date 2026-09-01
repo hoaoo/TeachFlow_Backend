@@ -134,7 +134,7 @@ export class HtmlGamePackageService {
       throw new BadRequestException('Mã HTML không được để trống');
     }
     if (body.length > DEFAULT_HTML_GAME_MAX_SOURCE_BYTES) {
-      throw new PayloadTooLargeException('Mã HTML dán trực tiếp vượt quá giới hạn 80 KB');
+      throw new PayloadTooLargeException('Mã HTML dán trực tiếp vượt quá giới hạn 2 MB');
     }
     return this.withRuntime([{
         relativePath: 'index.html',
