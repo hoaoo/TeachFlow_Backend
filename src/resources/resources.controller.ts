@@ -240,6 +240,17 @@ export class ResourcesController {
     return fs.createReadStream(slide.filePath).pipe(res);
   }
 
+  @Post(':id/retry-preview')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Thử lại quá trình tạo bản xem trước / trình chiếu' })
+  async retryPreview(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.resourcesService.retryPreview(id, user);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')

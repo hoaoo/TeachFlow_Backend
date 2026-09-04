@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
   InternalServerErrorException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as path from 'path';
@@ -22,6 +23,7 @@ import {
 } from './dto/presign-upload.dto';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { PreviewService } from './preview.service';
+import { PresentationService } from './presentation.service';
 
 @Injectable()
 export class ResourcesService {
@@ -32,6 +34,7 @@ export class ResourcesService {
     private storageService: StorageService,
     private configService: ConfigService,
     private previewService: PreviewService,
+    @Optional() private presentationService?: PresentationService,
   ) {}
 
   private async getTeacherId(user: AuthenticatedUser): Promise<string> {
@@ -597,6 +600,53 @@ export class ResourcesService {
     }
 
     return { success: true, message: 'Đã xóa tài nguyên thành công' };
+  }
+
+  async retryPreview(id: string, user: AuthenticatedUser) {
+    const resource = await this.prisma.teachingResource.findUnique({
+      where: { id },
+    });
+    if (!resource || resource.deletedAt) {
+      throw new NotFoundException('Tài nguyên không tồn tại');
+    }
+
+    let teacherId = user.teacherId;
+    if (user.role !== 'ADMIN' && !teacherId) {
+      const teacher = await this.prisma.teacher.findUnique({
+        where: { userId: user.userId },
+        select: { id: true },
+      });
+      teacherId = teacher?.id;
+    }
+    if (user.role !== 'ADMIN' && resource.teacherId !== teacherId) {
+      throw new ForbiddenException('Bạn không có quyền thao tác trên tài nguyên này');
+    }
+
+    // Delete existing presentation cache if presentation service is available
+    if (this.presentationService) {
+      await this.presentationService.deletePresentationCache(id);
+    }
+
+    // Reset preview status to PENDING
+    await this.prisma.teachingResource.update({
+      where: { id },
+      data: {
+        previewStatus: 'PENDING',
+        previewError: null,
+      },
+    });
+
+    // Re-trigger preview generation if stored file is present
+    if (resource.storedFileName) {
+      const filePath = await this.storageService.ensureLocalFile(resource.storedFileName);
+      void this.previewService.processResourcePreview(
+        id,
+        filePath,
+        resource.originalFileName || resource.name,
+      );
+    }
+
+    return { success: true, message: 'Đang bắt đầu xử lý lại bản xem trước' };
   }
 
   private mapResourceResponse(r: any) {

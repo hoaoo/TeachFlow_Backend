@@ -95,20 +95,17 @@ export class PreviewService {
       try {
         let pdfBuffer: Buffer | null = null;
 
-        if (binary) {
-          try {
-            this.logger.log(`Attempting LibreOffice conversion for resource ${resourceId} using ${binary}`);
-            // Use execFile with explicit arguments array to prevent any shell injection
-            const convertedPdfPath = await this.convertPowerPointToPdf(originalFilePath, tempDir);
-            pdfBuffer = await fs.promises.readFile(convertedPdfPath);
-          } catch (convErr: any) {
-            this.logger.warn(`LibreOffice conversion failed for ${resourceId}: ${convErr?.message}. Falling back to clean preview document.`);
-          }
+        if (!binary) {
+          throw new Error('LibreOffice chưa được cài đặt hoặc cấu hình trên hệ thống');
         }
 
-        // Fallback: Generate a clean preview PDF using pdfmake if LibreOffice not available
-        if (!pdfBuffer) {
-          pdfBuffer = await this.generateFallbackPptxPdf(originalFileName || 'Bài giảng PowerPoint');
+        this.logger.log(`Attempting LibreOffice conversion for resource ${resourceId} using ${binary}`);
+        // Use execFile with explicit arguments array to prevent any shell injection
+        const convertedPdfPath = await this.convertPowerPointToPdf(originalFilePath, tempDir);
+        pdfBuffer = await fs.promises.readFile(convertedPdfPath);
+
+        if (!pdfBuffer || pdfBuffer.length === 0) {
+          throw new Error('Tệp PDF được tạo ra từ PowerPoint bị rỗng');
         }
 
         const previewKey = `preview_${resourceId}.pdf`;
@@ -142,56 +139,5 @@ export class PreviewService {
         },
       }).catch(() => {});
     }
-  }
-
-  private generateFallbackPptxPdf(title: string): Promise<Buffer> {
-    return new Promise((resolve) => {
-      // Simple valid PDF generation without external deps using PDF stream/buffer
-      // PDF 1.4 minimal document
-      const content = `%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Kids [3 0 R] /Count 1 >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
-endobj
-4 0 obj
-<< /Length 200 >>
-stream
-BT
-/F1 20 Tf
-50 700 Td
-(TeachFlow Presentation Preview) Tj
-/F1 12 Tf
-0 -30 Td
-(File: ${title.replace(/[()]/g, '')}) Tj
-0 -25 Td
-(Ban xem truoc bai giang PowerPoint san sang.) Tj
-0 -20 Td
-(Vui long tai ve hoac mo bang PowerPoint de trinh chieu day du hieu ung.) Tj
-ET
-endstream
-endobj
-5 0 obj
-<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
-endobj
-xref
-0 6
-0000000000 65535 f 
-0000000010 00000 n 
-0000000060 00000 n 
-0000000117 00000 n 
-0000000227 00000 n 
-0000000478 00000 n 
-trailer
-<< /Size 6 /Root 1 0 R >>
-startxref
-557
-%%EOF`;
-      resolve(Buffer.from(content, 'utf-8'));
-    });
   }
 }

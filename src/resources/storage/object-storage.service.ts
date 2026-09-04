@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   GetObjectCommandOutput,
@@ -16,6 +17,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Readable } from 'stream';
 
 export interface ObjectStorageUpload {
   key: string;
@@ -88,6 +90,24 @@ export class ObjectStorageService {
     return Boolean(bucket && accessKeyId && secretAccessKey);
   }
 
+  private getLocalPath(safeKey: string): string {
+    const configuredDir =
+      this.config.get<string>('RESOURCE_UPLOAD_DIR') || 'uploads/resources';
+    const baseUploadDir = path.resolve(process.cwd(), configuredDir);
+    const target = (safeKey.startsWith('resources/') || safeKey.startsWith('presentations/'))
+      ? path.join(baseUploadDir, safeKey)
+      : path.join(this.localDir, safeKey);
+
+    const allowedPrefix = (safeKey.startsWith('resources/') || safeKey.startsWith('presentations/'))
+      ? baseUploadDir
+      : this.localDir;
+
+    if (!target.startsWith(allowedPrefix)) {
+      throw new InternalServerErrorException('Khóa lưu trữ đối tượng không hợp lệ');
+    }
+    return target;
+  }
+
   async putObject(file: ObjectStorageUpload): Promise<void> {
     const key = this.assertSafeKey(file.key);
     if (this.isS3Configured()) {
@@ -104,10 +124,7 @@ export class ObjectStorageService {
 
     // Local storage driver
     this.ensureLocalDir();
-    const fullPath = path.join(this.localDir, key);
-    if (!fullPath.startsWith(this.localDir)) {
-      throw new InternalServerErrorException('Khóa lưu trữ đối tượng không hợp lệ');
-    }
+    const fullPath = this.getLocalPath(key);
     await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.promises.writeFile(fullPath, file.body);
   }
@@ -129,7 +146,7 @@ export class ObjectStorageService {
     }
 
     // Local storage driver
-    const fullPath = path.join(this.localDir, safeKey);
+    const fullPath = this.getLocalPath(safeKey);
     return fs.existsSync(fullPath);
   }
 
@@ -162,10 +179,59 @@ export class ObjectStorageService {
     }
 
     // Local storage driver
-    const fullPrefixPath = path.join(this.localDir, this.assertSafeKey(prefix));
-    if (fullPrefixPath.startsWith(this.localDir) && fs.existsSync(fullPrefixPath)) {
+    const fullPrefixPath = this.getLocalPath(this.assertSafeKey(prefix));
+    if (fs.existsSync(fullPrefixPath)) {
       await fs.promises.rm(fullPrefixPath, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    const safeKey = this.assertSafeKey(key);
+    if (this.isS3Configured()) {
+      const { client, bucket } = this.connection();
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: safeKey }));
+      return;
+    }
+
+    // Local storage driver
+    const fullPath = this.getLocalPath(safeKey);
+    if (fs.existsSync(fullPath)) {
+      await fs.promises.unlink(fullPath).catch(() => undefined);
+    }
+  }
+
+  async getObjectBuffer(key: string): Promise<Buffer> {
+    const safeKey = this.assertSafeKey(key);
+    if (this.isS3Configured()) {
+      const { client, bucket } = this.connection();
+      try {
+        const response: GetObjectCommandOutput = await client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: safeKey }),
+        );
+        if (!response.Body) {
+          throw new NotFoundException('Không tìm thấy tệp lưu trữ');
+        }
+        const stream = response.Body as Readable;
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        return Buffer.concat(chunks);
+      } catch (error: any) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (status === 404 || error?.name === 'NotFound' || error?.name === 'NoSuchKey') {
+          throw new NotFoundException('Không tìm thấy tệp lưu trữ');
+        }
+        throw error;
+      }
+    }
+
+    // Local storage driver
+    const fullPath = this.getLocalPath(safeKey);
+    if (!fs.existsSync(fullPath)) {
+      throw new NotFoundException('Không tìm thấy tệp lưu trữ');
+    }
+    return fs.promises.readFile(fullPath);
   }
 
   async getFileStream(key: string): Promise<LocalFileStreamInfo> {
@@ -181,7 +247,7 @@ export class ObjectStorageService {
           Key: safeKey,
         }));
         if (!response.Body) {
-          throw new NotFoundException('Không tìm thấy tệp trò chơi');
+          throw new NotFoundException('Không tìm thấy tệp lưu trữ');
         }
         return {
           stream: response.Body as any,
@@ -191,20 +257,20 @@ export class ObjectStorageService {
       } catch (error: any) {
         const status = error?.$metadata?.httpStatusCode;
         if (status === 404 || error?.name === 'NotFound' || error?.name === 'NoSuchKey') {
-          throw new NotFoundException('Không tìm thấy tệp trò chơi');
+          throw new NotFoundException('Không tìm thấy tệp lưu trữ');
         }
         throw error;
       }
     }
 
     // Local storage driver
-    const fullPath = path.join(this.localDir, safeKey);
-    if (!fullPath.startsWith(this.localDir) || !fs.existsSync(fullPath)) {
-      throw new NotFoundException('Không tìm thấy tệp trò chơi');
+    const fullPath = this.getLocalPath(safeKey);
+    if (!fs.existsSync(fullPath)) {
+      throw new NotFoundException('Không tìm thấy tệp lưu trữ');
     }
     const stat = await fs.promises.stat(fullPath);
     if (stat.isDirectory()) {
-      throw new NotFoundException('Không tìm thấy tệp trò chơi');
+      throw new NotFoundException('Không tìm thấy tệp lưu trữ');
     }
     return {
       stream: fs.createReadStream(fullPath),

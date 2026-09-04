@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  Optional,
   BadRequestException,
   UnauthorizedException,
   InternalServerErrorException,
@@ -10,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { PresignUploadDto, PresignedUploadResponseDto } from '../dto/presign-upload.dto';
+import { ObjectStorageService } from './object-storage.service';
 
 export interface StoredFileResult {
   storedFileName: string;
@@ -23,7 +25,10 @@ export class StorageService {
   private readonly uploadDir: string;
   private readonly signingSecret: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    @Optional() private readonly objectStorage?: ObjectStorageService,
+  ) {
     const configuredDir =
       this.configService.get<string>('RESOURCE_UPLOAD_DIR') || 'uploads/resources';
     this.uploadDir = path.resolve(process.cwd(), configuredDir);
@@ -179,6 +184,10 @@ export class StorageService {
   /**
    * Save an uploaded file in memory/buffer to local disk with a sanitized UUID filename
    */
+  /**
+   * Save an uploaded file in memory/buffer to local disk with a sanitized UUID filename,
+   * and persist to S3/R2 if object storage is configured.
+   */
   async saveFile(file: Express.Multer.File, originalExt: string): Promise<StoredFileResult> {
     this.ensureDirectoryExists();
 
@@ -196,14 +205,30 @@ export class StorageService {
     }
 
     try {
+      let fileBuffer: Buffer | null = null;
       if (file.buffer && file.buffer.length > 0) {
-        await fs.promises.writeFile(fullPath, file.buffer);
+        fileBuffer = file.buffer;
+        await fs.promises.writeFile(fullPath, fileBuffer);
       } else if (file.path && fs.existsSync(file.path)) {
         await fs.promises.copyFile(file.path, fullPath);
+        fileBuffer = await fs.promises.readFile(fullPath);
         // Clean up multer temporary file if present
         fs.unlink(file.path, () => {});
       } else {
         throw new BadRequestException('Nội dung tập tin tải lên không hợp lệ hoặc rỗng');
+      }
+
+      // Persist to S3/R2 if configured
+      if (this.objectStorage?.isS3Configured() && fileBuffer) {
+        try {
+          await this.objectStorage.putObject({
+            key: `resources/${storedFileName}`,
+            body: fileBuffer,
+            contentType: file.mimetype || 'application/octet-stream',
+          });
+        } catch (uploadErr: any) {
+          this.logger.warn(`Failed to persist file ${storedFileName} to object storage: ${uploadErr?.message}`);
+        }
       }
     } catch (err: any) {
       if (err instanceof BadRequestException) {
@@ -222,6 +247,7 @@ export class StorageService {
 
   /**
    * Persist a generated (or already-in-memory) buffer. Never writes outside uploadDir.
+   * Persists to S3/R2 if object storage is configured.
    */
   async saveBuffer(buffer: Buffer, originalExt: string, customFileName?: string): Promise<StoredFileResult> {
     this.ensureDirectoryExists();
@@ -241,6 +267,19 @@ export class StorageService {
 
     try {
       await fs.promises.writeFile(fullPath, buffer);
+
+      // Persist to S3/R2 if configured
+      if (this.objectStorage?.isS3Configured()) {
+        try {
+          await this.objectStorage.putObject({
+            key: `resources/${storedFileName}`,
+            body: buffer,
+            contentType: 'application/octet-stream',
+          });
+        } catch (uploadErr: any) {
+          this.logger.warn(`Failed to persist buffer ${storedFileName} to object storage: ${uploadErr?.message}`);
+        }
+      }
     } catch (err: any) {
       this.logger.error(`Storage buffer write failure for ${storedFileName}: ${err?.message}`, err?.stack);
       throw new InternalServerErrorException('Không thể ghi dữ liệu tập tin lên hệ thống lưu trữ');
@@ -263,7 +302,7 @@ export class StorageService {
     this.ensureDirectoryExists();
     const filePath = this.getSafeFilePath(storedFileName);
 
-    return new Promise((resolve, reject) => {
+    const result = await new Promise<{ size: number; filePath: string }>((resolve, reject) => {
       const writeStream = fs.createWriteStream(filePath);
       let size = 0;
 
@@ -285,6 +324,21 @@ export class StorageService {
         reject(err);
       });
     });
+
+    if (this.objectStorage?.isS3Configured()) {
+      try {
+        const buffer = await fs.promises.readFile(filePath);
+        await this.objectStorage.putObject({
+          key: `resources/${path.basename(storedFileName)}`,
+          body: buffer,
+          contentType: 'application/octet-stream',
+        });
+      } catch (uploadErr: any) {
+        this.logger.warn(`Failed to sync streamed file ${storedFileName} to object storage: ${uploadErr?.message}`);
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -302,44 +356,98 @@ export class StorageService {
   }
 
   /**
-   * Check if file exists on disk
+   * Ensure file exists on local disk. If missing from disk but exists in S3/R2,
+   * restores it from S3/R2 into local disk cache.
+   */
+  async ensureLocalFile(storedFileName: string): Promise<string> {
+    const filePath = this.getSafeFilePath(storedFileName);
+    if (fs.existsSync(filePath)) {
+      return filePath;
+    }
+
+    if (this.objectStorage?.isS3Configured()) {
+      const s3Key = `resources/${path.basename(storedFileName)}`;
+      try {
+        const existsInS3 = await this.objectStorage.objectExists(s3Key);
+        if (existsInS3) {
+          const buffer = await this.objectStorage.getObjectBuffer(s3Key);
+          await fs.promises.writeFile(filePath, buffer);
+          this.logger.log(`Restored file from object storage to local cache: ${storedFileName}`);
+          return filePath;
+        }
+      } catch (err: any) {
+        this.logger.warn(`Failed to restore ${storedFileName} from object storage: ${err?.message}`);
+      }
+    }
+
+    return filePath;
+  }
+
+  /**
+   * Check if file exists on disk or in S3/R2 object storage
    */
   async fileExists(storedFileName: string): Promise<boolean> {
     try {
       const filePath = this.getSafeFilePath(storedFileName);
-      await fs.promises.access(filePath, fs.constants.F_OK);
-      return true;
+      if (fs.existsSync(filePath)) {
+        return true;
+      }
+
+      if (this.objectStorage?.isS3Configured()) {
+        const s3Key = `resources/${path.basename(storedFileName)}`;
+        const existsInS3 = await this.objectStorage.objectExists(s3Key);
+        if (existsInS3) {
+          // Restore to local cache so downstream file operations succeed
+          await this.ensureLocalFile(storedFileName);
+          return true;
+        }
+      }
+      return false;
     } catch {
       return false;
     }
   }
 
   /**
-   * Get file metadata from disk
+   * Get file metadata from disk (restoring from S3/R2 if needed)
    */
   async getFileStats(storedFileName: string): Promise<fs.Stats | null> {
     try {
-      const filePath = this.getSafeFilePath(storedFileName);
-      return await fs.promises.stat(filePath);
+      const filePath = await this.ensureLocalFile(storedFileName);
+      if (fs.existsSync(filePath)) {
+        return await fs.promises.stat(filePath);
+      }
+      return null;
     } catch {
       return null;
     }
   }
 
   /**
-   * Delete physical file from disk
+   * Delete physical file from disk and S3/R2 object storage
    */
   async deleteFile(storedFileName: string): Promise<boolean> {
+    let deleted = false;
     try {
       const filePath = this.getSafeFilePath(storedFileName);
       if (fs.existsSync(filePath)) {
         await fs.promises.unlink(filePath);
-        return true;
+        deleted = true;
       }
-      return false;
     } catch (err: any) {
       this.logger.warn(`Failed to delete physical file ${storedFileName}: ${err?.message}`);
-      return false;
     }
+
+    if (this.objectStorage?.isS3Configured()) {
+      try {
+        const s3Key = `resources/${path.basename(storedFileName)}`;
+        await this.objectStorage.deleteObject(s3Key);
+        deleted = true;
+      } catch (err: any) {
+        this.logger.warn(`Failed to delete object storage file ${storedFileName}: ${err?.message}`);
+      }
+    }
+
+    return deleted;
   }
 }

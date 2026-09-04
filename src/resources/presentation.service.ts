@@ -4,6 +4,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -13,10 +14,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { promisify } from 'util';
-import * as zlib from 'zlib';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
+import { ObjectStorageService } from './storage/object-storage.service';
 import { PreviewService } from './preview.service';
 import JSZip = require('jszip');
 
@@ -71,6 +72,7 @@ export class PresentationService {
     private readonly storageService: StorageService,
     private readonly configService: ConfigService,
     private readonly previewService: PreviewService,
+    @Optional() private readonly objectStorage?: ObjectStorageService,
   ) {
     this.presentationRoot = path.join(this.storageService.getUploadDir(), 'presentations');
   }
@@ -117,7 +119,10 @@ export class PresentationService {
 
   async deletePresentationCache(resourceId: string): Promise<void> {
     if (!RESOURCE_ID_PATTERN.test(resourceId)) return;
-    await fs.promises.rm(this.getResourceCacheRoot(resourceId), { recursive: true, force: true });
+    await fs.promises.rm(this.getResourceCacheRoot(resourceId), { recursive: true, force: true }).catch(() => undefined);
+    if (this.objectStorage?.isS3Configured()) {
+      await this.objectStorage.deletePrefix(`presentations/${resourceId}`).catch(() => undefined);
+    }
   }
 
   private async getAuthorizedResource(resourceId: string, user: AuthenticatedUser) {
@@ -163,7 +168,9 @@ export class PresentationService {
       throw new NotFoundException('Không tìm thấy tài liệu.');
     }
 
-    const filePath = this.storageService.getSafeFilePath(resource.storedFileName);
+    const filePath = typeof this.storageService.ensureLocalFile === 'function'
+      ? await this.storageService.ensureLocalFile(resource.storedFileName)
+      : this.storageService.getSafeFilePath(resource.storedFileName);
     let stats: fs.Stats;
     let header: Buffer;
     try {
@@ -216,21 +223,51 @@ export class PresentationService {
   private async readManifest(resourceId: string, fingerprint: string): Promise<PresentationManifest | null> {
     const cacheDir = this.getCacheDir(resourceId, fingerprint);
     try {
-      const raw = await fs.promises.readFile(path.join(cacheDir, CACHE_MANIFEST), 'utf8');
-      const manifest = JSON.parse(raw) as PresentationManifest;
-      if (
-        manifest.resourceId !== resourceId ||
-        manifest.fingerprint !== fingerprint ||
-        !Number.isInteger(manifest.slideCount) ||
-        manifest.slideCount < 1 ||
-        manifest.files.length !== manifest.slideCount ||
-        !manifest.files.every((file, index) => file === `slide-${String(index + 1).padStart(3, '0')}.png`)
-      ) {
-        return null;
+      if (fs.existsSync(path.join(cacheDir, CACHE_MANIFEST))) {
+        const raw = await fs.promises.readFile(path.join(cacheDir, CACHE_MANIFEST), 'utf8');
+        const manifest = JSON.parse(raw) as PresentationManifest;
+        if (
+          manifest.resourceId === resourceId &&
+          manifest.fingerprint === fingerprint &&
+          Number.isInteger(manifest.slideCount) &&
+          manifest.slideCount >= 1 &&
+          manifest.files.length === manifest.slideCount &&
+          manifest.files.every((file, index) => file === `slide-${String(index + 1).padStart(3, '0')}.png`)
+        ) {
+          const filesExist = manifest.files.every((file) => fs.existsSync(path.join(cacheDir, file)));
+          if (filesExist) {
+            return manifest;
+          }
+        }
       }
-      const existence = await Promise.all(manifest.files.map((file) => fs.promises.access(path.join(cacheDir, file))));
-      void existence;
-      return manifest;
+
+      // If missing on local disk, check if cached in object storage
+      if (this.objectStorage?.isS3Configured()) {
+        const s3ManifestKey = `presentations/${resourceId}/${fingerprint}/${CACHE_MANIFEST}`;
+        const existsInS3 = await this.objectStorage.objectExists(s3ManifestKey);
+        if (existsInS3) {
+          const manifestBuffer = await this.objectStorage.getObjectBuffer(s3ManifestKey);
+          const manifest = JSON.parse(manifestBuffer.toString('utf8')) as PresentationManifest;
+          if (
+            manifest.resourceId === resourceId &&
+            manifest.fingerprint === fingerprint &&
+            Number.isInteger(manifest.slideCount) &&
+            manifest.slideCount >= 1 &&
+            manifest.files.length === manifest.slideCount
+          ) {
+            await fs.promises.mkdir(cacheDir, { recursive: true });
+            for (const file of manifest.files) {
+              const slideKey = `presentations/${resourceId}/${fingerprint}/${file}`;
+              const slideBuf = await this.objectStorage.getObjectBuffer(slideKey);
+              await fs.promises.writeFile(path.join(cacheDir, file), slideBuf);
+            }
+            await fs.promises.writeFile(path.join(cacheDir, CACHE_MANIFEST), manifestBuffer);
+            this.logger.log(`Restored presentation slides from object storage for resource ${resourceId}`);
+            return manifest;
+          }
+        }
+      }
+      return null;
     } catch {
       return null;
     }
@@ -256,13 +293,57 @@ export class PresentationService {
         files,
       };
       await fs.promises.writeFile(path.join(stagingDir, CACHE_MANIFEST), JSON.stringify(manifest), 'utf8');
+
+      // Sync generated slides to ObjectStorage if S3 configured
+      if (this.objectStorage?.isS3Configured()) {
+        try {
+          const s3Prefix = `presentations/${resourceId}/${fingerprint}`;
+          for (const file of files) {
+            const buf = await fs.promises.readFile(path.join(stagingDir, file));
+            await this.objectStorage.putObject({
+              key: `${s3Prefix}/${file}`,
+              body: buf,
+              contentType: 'image/png',
+            });
+          }
+          const manifestBuf = Buffer.from(JSON.stringify(manifest), 'utf8');
+          await this.objectStorage.putObject({
+            key: `${s3Prefix}/${CACHE_MANIFEST}`,
+            body: manifestBuf,
+            contentType: 'application/json',
+          });
+        } catch (s3Err: any) {
+          this.logger.warn(`Failed to sync presentation slides to object storage: ${s3Err?.message}`);
+        }
+      }
+
       await fs.promises.rm(cacheDir, { recursive: true, force: true });
       await fs.promises.rename(stagingDir, cacheDir);
       await this.removeStaleCaches(resourceId, fingerprint);
+
+      if (typeof this.prisma?.teachingResource?.update === 'function') {
+        await this.prisma.teachingResource.update({
+          where: { id: resourceId },
+          data: {
+            previewStatus: 'READY',
+            previewError: null,
+          },
+        }).catch(() => undefined);
+      }
+
       return manifest;
     } catch (error) {
       if (error instanceof UnsupportedMediaTypeException) throw error;
-      this.logger.error(`Presentation conversion failed for resource ${resourceId}`);
+      this.logger.error(`Presentation conversion failed for resource ${resourceId}: ${(error as any)?.message}`);
+      if (typeof this.prisma?.teachingResource?.update === 'function') {
+        await this.prisma.teachingResource.update({
+          where: { id: resourceId },
+          data: {
+            previewStatus: 'FAILED',
+            previewError: (error as any)?.message || 'Không thể chuẩn bị bản trình chiếu PowerPoint.',
+          },
+        }).catch(() => undefined);
+      }
       throw new InternalServerErrorException('Không thể chuẩn bị bản trình chiếu.');
     } finally {
       await Promise.all([
@@ -284,90 +365,63 @@ export class PresentationService {
     }
   }
 
-  private async convertToSlides(sourcePath: string, operationDir: string, stagingDir: string): Promise<string[]> {
-    try {
-      const pdfTool = this.configService.get<string>('PDFTOPPM_PATH') || 'pdftoppm';
-      const pdfPath = await this.previewService.convertPowerPointToPdf(sourcePath, operationDir);
-      const renderPrefix = path.join(operationDir, 'rendered-slide');
-      await execFileAsync(
-        pdfTool,
-        ['-png', '-r', '144', pdfPath, renderPrefix],
-        { timeout: CONVERSION_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
-      );
-
-      const rendered = (await fs.promises.readdir(operationDir))
-        .filter((file) => /^rendered-slide-\d+\.png$/i.test(file))
-        .sort((a, b) => Number(a.match(/(\d+)\.png$/i)?.[1]) - Number(b.match(/(\d+)\.png$/i)?.[1]));
-
-      if (rendered.length > 0) {
-        const files: string[] = [];
-        for (let index = 0; index < rendered.length; index += 1) {
-          const fileName = `slide-${String(index + 1).padStart(3, '0')}.png`;
-          await fs.promises.copyFile(path.join(operationDir, rendered[index]), path.join(stagingDir, fileName));
-          files.push(fileName);
-        }
-        return files;
-      }
-    } catch (err: any) {
-      this.logger.warn(`Native PowerPoint conversion unavailable (${err?.message}). Using fallback slide presentation.`);
+  private async validatePngSlide(filePath: string): Promise<void> {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size < 24) {
+      throw new Error('Tệp hình ảnh slide không đầy đủ hoặc rỗng');
     }
-
-    // Fallback: Generate clean slide PNG
-    const fallbackSlide = this.generateFallbackSlidePng();
-    const fileName = 'slide-001.png';
-    await fs.promises.writeFile(path.join(stagingDir, fileName), fallbackSlide);
-    return [fileName];
+    const handle = await fs.promises.open(filePath, 'r');
+    try {
+      const header = Buffer.alloc(24);
+      await handle.read(header, 0, 24, 0);
+      const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+      for (let i = 0; i < 8; i++) {
+        if (header[i] !== pngSignature[i]) {
+          throw new Error('Định dạng ảnh slide không hợp lệ');
+        }
+      }
+      const chunkType = header.toString('ascii', 12, 16);
+      if (chunkType !== 'IHDR') {
+        throw new Error('Cấu trúc ảnh slide không hợp lệ');
+      }
+      const width = header.readUInt32BE(16);
+      const height = header.readUInt32BE(20);
+      if (width <= 0 || height <= 0) {
+        throw new Error('Kích thước ảnh slide không hợp lệ');
+      }
+    } finally {
+      await handle.close();
+    }
   }
 
-  private generateFallbackSlidePng(): Buffer {
-    const width = 1280;
-    const height = 720;
-    const crcTable: number[] = [];
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) {
-        if (c & 1) c = 0xedb88320 ^ (c >>> 1);
-        else c = c >>> 1;
-      }
-      crcTable[n] = c;
+  private async convertToSlides(sourcePath: string, operationDir: string, stagingDir: string): Promise<string[]> {
+    const pdfTool = this.configService.get<string>('PDFTOPPM_PATH') || 'pdftoppm';
+    const pdfPath = await this.previewService.convertPowerPointToPdf(sourcePath, operationDir);
+    const renderPrefix = path.join(operationDir, 'rendered-slide');
+    await execFileAsync(
+      pdfTool,
+      ['-png', '-r', '144', pdfPath, renderPrefix],
+      { timeout: CONVERSION_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+    );
+
+    const rendered = (await fs.promises.readdir(operationDir))
+      .filter((file) => /^rendered-slide-\d+\.png$/i.test(file))
+      .sort((a, b) => Number(a.match(/(\d+)\.png$/i)?.[1]) - Number(b.match(/(\d+)\.png$/i)?.[1]));
+
+    if (rendered.length === 0) {
+      throw new Error('Không thể tạo trang trình chiếu từ tệp PowerPoint.');
     }
-    const crc32 = (buf: Buffer): number => {
-      let c = 0xffffffff;
-      for (let i = 0; i < buf.length; i++) {
-        c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-      }
-      return (c ^ 0xffffffff) >>> 0;
-    };
-    const makeChunk = (type: string, data: Buffer): Buffer => {
-      const len = data.length;
-      const typeBuf = Buffer.from(type, 'ascii');
-      const body = Buffer.concat([typeBuf, data]);
-      const crc = crc32(body);
-      const head = Buffer.alloc(4);
-      head.writeUInt32BE(len, 0);
-      const tail = Buffer.alloc(4);
-      tail.writeUInt32BE(crc, 0);
-      return Buffer.concat([head, body, tail]);
-    };
-    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-    const ihdr = Buffer.alloc(13);
-    ihdr.writeUInt32BE(width, 0);
-    ihdr.writeUInt32BE(height, 4);
-    ihdr[8] = 8;
-    ihdr[9] = 2; // RGB
-    ihdr[10] = 0;
-    ihdr[11] = 0;
-    ihdr[12] = 0;
-    const ihdrChunk = makeChunk('IHDR', ihdr);
-    const rowBytes = 1 + width * 3;
-    const rawData = Buffer.alloc(height * rowBytes, 245);
-    for (let y = 0; y < height; y++) {
-      rawData[y * rowBytes] = 0;
+
+    const files: string[] = [];
+    for (let index = 0; index < rendered.length; index += 1) {
+      const srcFile = path.join(operationDir, rendered[index]);
+      await this.validatePngSlide(srcFile);
+
+      const fileName = `slide-${String(index + 1).padStart(3, '0')}.png`;
+      await fs.promises.copyFile(srcFile, path.join(stagingDir, fileName));
+      files.push(fileName);
     }
-    const compressed = zlib.deflateSync(rawData);
-    const idatChunk = makeChunk('IDAT', compressed);
-    const iendChunk = makeChunk('IEND', Buffer.alloc(0));
-    return Buffer.concat([signature, ihdrChunk, idatChunk, iendChunk]);
+    return files;
   }
 
   private async removeStaleCaches(resourceId: string, currentFingerprint: string): Promise<void> {
