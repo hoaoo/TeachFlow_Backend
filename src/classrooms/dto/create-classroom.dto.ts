@@ -12,10 +12,10 @@ export class CreateClassroomDto {
   @IsString({ message: 'Mã lớp phải là chuỗi ký tự' })
   code?: string;
 
-  @ApiProperty({ description: 'ID Khối lớp', example: '14cf8399-d149-46a6-b44c-f9b4cbbbae1e' })
+  @ApiPropertyOptional({ description: 'ID Khối lớp', example: '14cf8399-d149-46a6-b44c-f9b4cbbbae1e' })
+  @IsOptional()
   @IsString({ message: 'Mã khối lớp (gradeId) phải là chuỗi ký tự' })
-  @IsNotEmpty({ message: 'Khối lớp không được để trống' })
-  gradeId: string;
+  gradeId?: string;
 
   @ApiProperty({ description: 'ID Năm học', example: 'e9e50c01-6ebd-43cf-a128-abca025b0bff' })
   @IsString({ message: 'Mã năm học (schoolYearId) phải là chuỗi ký tự' })

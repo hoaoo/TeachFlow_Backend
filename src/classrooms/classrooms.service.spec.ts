@@ -148,6 +148,45 @@ describe('ClassroomsService (Phase 2 Master Data & Authorization)', () => {
       });
     });
 
+    it('should create classroom successfully without gradeId for higher education / custom profiles', async () => {
+      mockPrisma.schoolYear.findUnique.mockResolvedValueOnce(mockSchoolYearCurrent);
+      mockPrisma.teacher.findUnique.mockResolvedValueOnce(mockTeacherA);
+      mockPrisma.classroom.findFirst.mockResolvedValueOnce(null);
+      const mockHigherEdClass = {
+        ...mockClassroomA,
+        id: 'class-univ-1',
+        code: 'CS101',
+        name: 'Lớp Học Phần CS101',
+        gradeId: null,
+        grade: null,
+      };
+      mockPrisma.classroom.create.mockResolvedValueOnce(mockHigherEdClass);
+
+      const result = await service.create(
+        {
+          schoolYearId: 'sy-2026',
+          code: 'CS101',
+          name: 'Lớp Học Phần CS101',
+          homeroomTeacherId: 'teacher-a',
+        },
+        'teacher-a',
+      );
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe('class-univ-1');
+      expect(mockPrisma.grade.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.classroom.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          code: 'CS101',
+          name: 'Lớp Học Phần CS101',
+          schoolYearId: 'sy-2026',
+          gradeId: undefined,
+          teacherId: 'teacher-a',
+        }),
+        include: expect.any(Object),
+      });
+    });
+
     it('should NOT auto-create teachingAssignment or auto-assign subject when creating classroom', async () => {
       mockPrisma.schoolYear.findUnique.mockResolvedValueOnce(mockSchoolYearCurrent);
       mockPrisma.grade.findUnique.mockResolvedValueOnce(mockGrade4);

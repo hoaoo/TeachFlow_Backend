@@ -358,34 +358,18 @@ export class ClassroomsService {
     }
 
     let gradeId = dto.gradeId;
-    if (!gradeId) {
-      const gradeNumMatch = dto.name.match(/\d+/);
-      const gradeLevel = gradeNumMatch ? parseInt(gradeNumMatch[0], 10) : 4;
-      const matchedGrade =
-        (await this.prisma.grade.findFirst({
-          where: { level: gradeLevel, isActive: true },
-        })) ||
-        (await this.prisma.grade.findFirst({
-          where: { isActive: true },
-          orderBy: { level: 'asc' },
-        }));
-      gradeId = matchedGrade?.id;
-    }
+    if (gradeId) {
+      const grade = await this.prisma.grade.findUnique({
+        where: { id: gradeId },
+      });
 
-    if (!gradeId) {
-      throw new BadRequestException('Vui lòng chọn khối lớp');
-    }
+      if (!grade) {
+        throw new NotFoundException(`Không tìm thấy khối lớp với mã ${gradeId}`);
+      }
 
-    const grade = await this.prisma.grade.findUnique({
-      where: { id: gradeId },
-    });
-
-    if (!grade) {
-      throw new NotFoundException(`Không tìm thấy khối lớp với mã ${gradeId}`);
-    }
-
-    if (!grade.isActive) {
-      throw new BadRequestException(`Khối lớp "${grade.name}" đang không ở trạng thái hoạt động`);
+      if (!grade.isActive) {
+        throw new BadRequestException(`Khối lớp "${grade.name}" đang không ở trạng thái hoạt động`);
+      }
     }
 
     const targetTeacherId = currentTeacherId || dto.homeroomTeacherId || dto.teacherId;
@@ -1655,7 +1639,7 @@ export class ClassroomsService {
       code: cls.code || cls.name,
       name: cls.name,
       gradeId: cls.gradeId,
-      grade: cls.grade?.name || 'Khối 4',
+      grade: cls.grade?.name || '',
       gradeDetail: cls.grade
         ? {
             id: cls.grade.id,

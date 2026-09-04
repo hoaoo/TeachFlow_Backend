@@ -268,7 +268,7 @@ model Classroom {
   id                String    @id @default(uuid())
   code              String
   name              String
-  gradeId           String
+  gradeId           String?
   schoolYearId      String
   teacherId         String
   homeroomTeacherId String?
@@ -281,7 +281,7 @@ model Classroom {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  grade                  Grade                   @relation(fields: [gradeId], references: [id])
+  grade                  Grade?                  @relation(fields: [gradeId], references: [id], onDelete: SetNull)
   schoolYear             SchoolYear              @relation(fields: [schoolYearId], references: [id])
   teacher                Teacher                 @relation("ClassroomOwner", fields: [teacherId], references: [id])
   homeroomTeacher        Teacher?                @relation("ClassroomHomeroomTeacher", fields: [homeroomTeacherId], references: [id], onDelete: SetNull)
