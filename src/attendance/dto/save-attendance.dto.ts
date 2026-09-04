@@ -20,6 +20,10 @@ export class StudentAttendanceItemDto {
   @IsEnum(AttendanceStatusEnum)
   status?: AttendanceStatusEnum = AttendanceStatusEnum.PRESENT;
 
+  @ApiPropertyOptional({ example: 5, description: 'Số phút đi muộn nếu LATE' })
+  @IsOptional()
+  lateMinutes?: number = 0;
+
   @ApiPropertyOptional({ example: 'Đúng giờ' })
   @IsOptional()
   @IsString()
@@ -41,6 +45,16 @@ export class SaveAttendanceDto {
   @IsOptional()
   @IsString()
   sessionPeriod?: string;
+
+  @ApiPropertyOptional({ description: 'Tiêu đề buổi điểm danh' })
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @ApiPropertyOptional({ description: 'Ghi chú chung buổi điểm danh' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 
   @ApiProperty({ type: [StudentAttendanceItemDto] })
   @IsArray()

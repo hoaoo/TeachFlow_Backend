@@ -1440,7 +1440,10 @@ export class ClassroomsService {
         id: sess.id,
         scheduleId: sess.scheduleId,
         date: sess.attendanceDate.toISOString().split('T')[0],
-        subjectName: sess.schedule?.subjectName || sess.schedule?.subject?.name || 'Môn học',
+        sessionPeriod: sess.sessionPeriod,
+        title: sess.title,
+        note: sess.note,
+        subjectName: sess.schedule?.subjectName || sess.schedule?.subject?.name || sess.title || 'Môn học',
         teacherName: sess.teacher?.fullName || 'Giáo viên',
         stats: {
           present: sPresent,

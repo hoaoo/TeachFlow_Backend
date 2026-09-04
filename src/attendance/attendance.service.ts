@@ -564,10 +564,14 @@ export class AttendanceService {
       });
 
       const presentCount = dto.attendances.filter((a) => normalizeAttendanceStatus(a.status) === 'PRESENT').length;
-      const absentCount = dto.attendances.filter((a) => normalizeAttendanceStatus(a.status) === 'EXCUSED_ABSENCE' || normalizeAttendanceStatus(a.status) === 'UNEXCUSED_ABSENCE').length;
+      const excusedCount = dto.attendances.filter((a) => normalizeAttendanceStatus(a.status) === 'EXCUSED_ABSENCE').length;
+      const unexcusedCount = dto.attendances.filter((a) => normalizeAttendanceStatus(a.status) === 'UNEXCUSED_ABSENCE').length;
+      const lateCount = dto.attendances.filter((a) => normalizeAttendanceStatus(a.status) === 'LATE').length;
+      const absentCount = excusedCount + unexcusedCount;
+      const totalStudents = dto.attendances.length;
 
-      const title = `${classroom.name} · ${targetDate.toLocaleDateString('vi-VN')}`;
-      const meta = `${presentCount} có mặt · ${absentCount} vắng`;
+      const title = dto.title?.trim() || `${classroom.name} · ${targetDate.toLocaleDateString('vi-VN')}`;
+      const meta = `${presentCount}/${totalStudents} có mặt · ${absentCount} vắng · ${lateCount} muộn`;
 
       if (!session) {
         session = await tx.attendanceSession.create({
@@ -579,6 +583,7 @@ export class AttendanceService {
             sessionPeriod: dto.sessionPeriod || 'MORNING',
             title,
             meta,
+            note: dto.note?.trim() || null,
             status: 'Đã điểm danh',
             completedAt: new Date(),
           },
@@ -589,6 +594,7 @@ export class AttendanceService {
           data: {
             title,
             meta,
+            note: dto.note?.trim() || null,
             status: 'Đã điểm danh',
             completedAt: new Date(),
           },
@@ -597,6 +603,7 @@ export class AttendanceService {
 
       for (const item of dto.attendances) {
         const normStatus = normalizeAttendanceStatus(item.status);
+        const lateMinutes = normStatus === 'LATE' ? Math.max(0, item.lateMinutes || 5) : 0;
         await tx.studentAttendance.upsert({
           where: {
             attendanceSessionId_studentId: {
@@ -606,21 +613,45 @@ export class AttendanceService {
           },
           update: {
             status: normStatus,
+            lateMinutes,
             note: item.note,
           },
           create: {
             attendanceSessionId: session.id,
             studentId: item.studentId,
             status: normStatus,
+            lateMinutes,
             note: item.note,
           },
         });
       }
 
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'ATTENDANCE_SAVE',
+        resourceType: 'AttendanceSession',
+        resourceId: session.id,
+        details: {
+          classroomId: dto.classId,
+          presentCount,
+          absentCount,
+          lateCount,
+          totalStudents,
+        },
+      });
+
       return {
         success: true,
         message: 'Lưu điểm danh thành công',
         sessionId: session.id,
+        summary: {
+          totalStudents,
+          presentCount,
+          excusedCount,
+          unexcusedCount,
+          lateCount,
+          absentCount,
+        },
       };
     }).catch((error: any) => {
       if (error?.code === 'P2002') {
@@ -655,5 +686,271 @@ export class AttendanceService {
       meta: s.meta || `${s.attendances.length} học sinh`,
       tone: s.tone || 'teal',
     }));
+  }
+
+  async getSessionAttendance(sessionId: string, teacherId?: string) {
+    const session = await this.prisma.attendanceSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        classroom: { include: { grade: true } },
+        schedule: { include: { subject: true } },
+        attendances: {
+          include: { student: true },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException(`Không tìm thấy phiên điểm danh với mã ${sessionId}`);
+    }
+
+    if (teacherId && session.teacherId !== teacherId) {
+      await this.assignmentAuth.assertTeacherCanAccessClassroomAttendance(
+        session.classroomId,
+        teacherId,
+      );
+    }
+
+    const targetDate = new Date(session.attendanceDate);
+    targetDate.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const enrollments = await this.prisma.studentEnrollment.findMany({
+      where: {
+        classroomId: session.classroomId,
+        enrolledAt: { lte: endOfDay },
+        OR: [
+          { leftAt: null },
+          { leftAt: { gte: targetDate } },
+        ],
+        status: { in: ['ACTIVE', 'TRANSFERRED', 'COMPLETED'] },
+        student: { deletedAt: null },
+      },
+      include: { student: true },
+      orderBy: { student: { fullName: 'asc' } },
+    });
+
+    const attendanceMap = new Map(
+      session.attendances.map((a) => [a.studentId, a]),
+    );
+
+    const students = enrollments.map((enr) => {
+      const s = enr.student;
+      const att = attendanceMap.get(s.id);
+      return {
+        studentId: s.id,
+        name: s.fullName,
+        studentCode: s.studentCode || '',
+        initials: s.initials || s.fullName.slice(0, 2).toUpperCase(),
+        gender: s.gender === 'FEMALE' ? 'Nữ' : 'Nam',
+        status: att?.status || 'PRESENT',
+        lateMinutes: att?.lateMinutes || 0,
+        note: att?.note || '',
+      };
+    });
+
+    const presentCount = students.filter((s) => s.status === 'PRESENT').length;
+    const excusedCount = students.filter((s) => s.status === 'EXCUSED_ABSENCE').length;
+    const unexcusedCount = students.filter((s) => s.status === 'UNEXCUSED_ABSENCE').length;
+    const lateCount = students.filter((s) => s.status === 'LATE').length;
+
+    return {
+      session: {
+        id: session.id,
+        title: session.title,
+        sessionPeriod: session.sessionPeriod,
+        attendanceDate: session.attendanceDate.toISOString().split('T')[0],
+        classroomId: session.classroomId,
+        className: session.classroom?.name || 'Lớp học',
+        scheduleId: session.scheduleId,
+        subjectName: session.schedule?.subjectName || session.schedule?.subject?.name || '',
+        note: session.note || '',
+        status: session.status || 'Đã điểm danh',
+      },
+      isRecorded: true,
+      sessionId: session.id,
+      note: session.note || '',
+      summary: {
+        totalStudents: students.length,
+        presentCount,
+        excusedCount,
+        unexcusedCount,
+        lateCount,
+        absentCount: excusedCount + unexcusedCount,
+      },
+      students,
+    };
+  }
+
+  async updateSessionAttendance(
+    sessionId: string,
+    dto: {
+      title?: string;
+      note?: string;
+      attendances: Array<{
+        studentId: string;
+        status?: string;
+        lateMinutes?: number;
+        note?: string;
+      }>;
+    },
+    teacherId: string,
+  ) {
+    const session = await this.prisma.attendanceSession.findUnique({
+      where: { id: sessionId },
+      include: { classroom: { include: { schoolYear: true } } },
+    });
+
+    if (!session) {
+      throw new NotFoundException(`Không tìm thấy phiên điểm danh với mã ${sessionId}`);
+    }
+
+    if (session.teacherId !== teacherId) {
+      await this.assignmentAuth.assertTeacherCanAccessClassroomAttendance(
+        session.classroomId,
+        teacherId,
+      );
+    }
+
+    if (session.classroom?.schoolYear && !session.classroom.schoolYear.isActive) {
+      throw new BadRequestException('Không thể chỉnh sửa điểm danh cho lớp thuộc năm học đã kết thúc');
+    }
+
+    const studentIds = dto.attendances.map((a) => a.studentId);
+    const uniqueIds = new Set(studentIds);
+    if (uniqueIds.size !== studentIds.length) {
+      throw new BadRequestException('Dữ liệu điểm danh chứa học sinh bị trùng lặp');
+    }
+
+    const targetDate = new Date(session.attendanceDate);
+    targetDate.setHours(0, 0, 0, 0);
+
+    if (studentIds.length > 0) {
+      await this.assignmentAuth.assertStudentsEnrolled(
+        session.classroomId,
+        studentIds,
+        targetDate,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const normalizedAttendances = dto.attendances.map((a) => ({
+        studentId: a.studentId,
+        status: normalizeAttendanceStatus(a.status),
+        lateMinutes:
+          a.status === 'LATE' || normalizeAttendanceStatus(a.status) === 'LATE'
+            ? Math.max(0, a.lateMinutes || 5)
+            : 0,
+        note: a.note?.trim() || null,
+      }));
+
+      const presentCount = normalizedAttendances.filter((a) => a.status === 'PRESENT').length;
+      const excusedCount = normalizedAttendances.filter((a) => a.status === 'EXCUSED_ABSENCE').length;
+      const unexcusedCount = normalizedAttendances.filter((a) => a.status === 'UNEXCUSED_ABSENCE').length;
+      const lateCount = normalizedAttendances.filter((a) => a.status === 'LATE').length;
+      const totalStudents = normalizedAttendances.length;
+
+      const title = dto.title?.trim() || session.title || `${session.classroom.name} · ${targetDate.toLocaleDateString('vi-VN')}`;
+      const meta = `${presentCount}/${totalStudents} có mặt · ${excusedCount + unexcusedCount} vắng · ${lateCount} muộn`;
+
+      const updated = await tx.attendanceSession.update({
+        where: { id: sessionId },
+        data: {
+          title,
+          meta,
+          note: dto.note?.trim() !== undefined ? dto.note?.trim() || null : session.note,
+          status: 'Đã điểm danh',
+          completedAt: new Date(),
+        },
+      });
+
+      for (const item of normalizedAttendances) {
+        await tx.studentAttendance.upsert({
+          where: {
+            attendanceSessionId_studentId: {
+              attendanceSessionId: sessionId,
+              studentId: item.studentId,
+            },
+          },
+          update: {
+            status: item.status,
+            lateMinutes: item.lateMinutes,
+            note: item.note,
+          },
+          create: {
+            attendanceSessionId: sessionId,
+            studentId: item.studentId,
+            status: item.status,
+            lateMinutes: item.lateMinutes,
+            note: item.note,
+          },
+        });
+      }
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'ATTENDANCE_UPDATE',
+        resourceType: 'AttendanceSession',
+        resourceId: sessionId,
+        details: {
+          classroomId: session.classroomId,
+          presentCount,
+          absentCount: excusedCount + unexcusedCount,
+          lateCount,
+          totalStudents,
+        },
+      });
+
+      return {
+        success: true,
+        message: 'Cập nhật điểm danh thành công',
+        sessionId: updated.id,
+        summary: {
+          totalStudents,
+          presentCount,
+          excusedCount,
+          unexcusedCount,
+          lateCount,
+          absentCount: excusedCount + unexcusedCount,
+        },
+      };
+    });
+  }
+
+  async deleteSessionAttendance(sessionId: string, teacherId: string) {
+    const session = await this.prisma.attendanceSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new NotFoundException(`Không tìm thấy phiên điểm danh với mã ${sessionId}`);
+    }
+
+    if (session.teacherId !== teacherId) {
+      await this.assignmentAuth.assertTeacherCanAccessClassroomAttendance(
+        session.classroomId,
+        teacherId,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.studentAttendance.deleteMany({
+        where: { attendanceSessionId: sessionId },
+      });
+      await tx.attendanceSession.delete({
+        where: { id: sessionId },
+      });
+
+      this.auditService?.log({
+        actorUserId: teacherId,
+        action: 'ATTENDANCE_DELETE',
+        resourceType: 'AttendanceSession',
+        resourceId: sessionId,
+        details: { classroomId: session.classroomId },
+      });
+
+      return { success: true, message: 'Đã xóa buổi điểm danh thành công' };
+    });
   }
 }

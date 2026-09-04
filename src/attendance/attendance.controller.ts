@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Delete,
   Param,
   Query,
   Body,
@@ -100,5 +101,42 @@ export class AttendanceController {
   @ApiOperation({ summary: 'Lấy lịch sử các phiên điểm danh' })
   async getHistory(@CurrentUser() user: AuthenticatedUser) {
     return this.attendanceService.getHistory(user.teacherId);
+  }
+
+  @Get('sessions/:sessionId')
+  @ApiOperation({ summary: 'Lấy chi tiết phiên điểm danh kèm danh sách học sinh' })
+  async getSessionAttendance(
+    @Param('sessionId') sessionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.getSessionAttendance(sessionId, user.teacherId);
+  }
+
+  @Put('sessions/:sessionId')
+  @ApiOperation({ summary: 'Cập nhật phiên điểm danh trong database transaction' })
+  async updateSessionAttendance(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: {
+      title?: string;
+      note?: string;
+      attendances: Array<{
+        studentId: string;
+        status?: string;
+        lateMinutes?: number;
+        note?: string;
+      }>;
+    },
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.updateSessionAttendance(sessionId, dto, user.teacherId);
+  }
+
+  @Delete('sessions/:sessionId')
+  @ApiOperation({ summary: 'Xóa phiên điểm danh' })
+  async deleteSessionAttendance(
+    @Param('sessionId') sessionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.deleteSessionAttendance(sessionId, user.teacherId);
   }
 }

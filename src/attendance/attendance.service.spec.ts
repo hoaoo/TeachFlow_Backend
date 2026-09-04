@@ -72,9 +72,11 @@ describe('AttendanceService (Schedule & Temporal Attendance)', () => {
               findUnique: jest.fn().mockResolvedValue(null),
               create: jest.fn().mockResolvedValue({ id: 'session-new' }),
               update: jest.fn().mockResolvedValue({ id: 'session-updated' }),
+              delete: jest.fn().mockResolvedValue({ id: 'session-1' }),
             },
             studentAttendance: {
               upsert: jest.fn().mockResolvedValue({ id: 'att-1' }),
+              deleteMany: jest.fn().mockResolvedValue({ count: 3 }),
             },
           });
         }
@@ -220,5 +222,65 @@ describe('AttendanceService (Schedule & Temporal Attendance)', () => {
     expect(summary.summary.lateCount).toBe(1);
     expect(summary.summary.unexcusedCount).toBe(1);
     expect(summary.summary.attendanceRate).toBe(67);
+  });
+
+  it('gets attendance session details with student list', async () => {
+    jest.spyOn(prisma.attendanceSession, 'findUnique').mockResolvedValue({
+      ...mockSession,
+      classroom: mockClass4A1,
+      schedule: mockSchedule,
+    } as any);
+    jest.spyOn(prisma.studentEnrollment, 'findMany').mockResolvedValue([
+      { studentId: 'student-1', student: { id: 'student-1', fullName: 'Nguyễn Văn A', studentCode: 'HS01', gender: 'MALE' } },
+      { studentId: 'student-2', student: { id: 'student-2', fullName: 'Trần Thị B', studentCode: 'HS02', gender: 'FEMALE' } },
+      { studentId: 'student-3', student: { id: 'student-3', fullName: 'Lê Văn C', studentCode: 'HS03', gender: 'MALE' } },
+    ] as any);
+
+    const result = await service.getSessionAttendance('session-1', 'teacher-1');
+
+    expect(result).toBeDefined();
+    expect(result.sessionId).toBe('session-1');
+    expect(result.students.length).toBe(3);
+    expect(result.summary.presentCount).toBe(1);
+    expect(result.summary.lateCount).toBe(1);
+    expect(result.summary.unexcusedCount).toBe(1);
+  });
+
+  it('updates session attendance in atomic transaction', async () => {
+    jest.spyOn(prisma.attendanceSession, 'findUnique').mockResolvedValue({
+      ...mockSession,
+      classroom: mockClass4A1,
+    } as any);
+
+    const result = await service.updateSessionAttendance(
+      'session-1',
+      {
+        title: 'Điểm danh buổi sáng cập nhật',
+        note: 'Cập nhật lý do vắng',
+        attendances: [
+          { studentId: 'student-1', status: 'PRESENT' },
+          { studentId: 'student-2', status: 'PRESENT' },
+          { studentId: 'student-3', status: 'EXCUSED_ABSENCE', note: 'Có đơn xin phép' },
+        ],
+      },
+      'teacher-1',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary.presentCount).toBe(2);
+    expect(result.summary.excusedCount).toBe(1);
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('deletes session attendance in atomic transaction', async () => {
+    jest.spyOn(prisma.attendanceSession, 'findUnique').mockResolvedValue({
+      ...mockSession,
+      classroom: mockClass4A1,
+    } as any);
+
+    const result = await service.deleteSessionAttendance('session-1', 'teacher-1');
+
+    expect(result.success).toBe(true);
+    expect(prisma.$transaction).toHaveBeenCalled();
   });
 });
